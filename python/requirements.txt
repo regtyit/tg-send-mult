@@ -1,0 +1,5 @@
+# Telethon MTProto client (used by tg-send-mult Node worker via subprocess bridge).
+telethon>=1.36.0,<2
+cryptg>=0.4,<0.6
+# Telethon uses this for SOCKS proxies and expects it when `proxy=` is set.
+python-socks[asyncio]>=2.4.0,<3
