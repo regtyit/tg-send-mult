@@ -50,3 +50,8 @@ Telegram has documented **frozen / limited** account behaviour in recent API lay
 - Third-party documentation is sparse; TDLib and user-client libraries report inconsistent behaviour per method ([example](https://github.com/tdlib/td/issues/3471)). There is no reliable server-side “unfreeze” API — recovery is through normal client use and time.
 
 **Operational takeaway:** if both `contacts.search` / `messages.sendMessage` and related calls return `FROZEN_METHOD_INVALID`, treat the session as **not production-ready** until the official app shows a healthy, verified session.
+
+## See also
+
+- [User guide](USER_GUIDE.md) — operating accounts and campaigns
+- [README](../README.md) — project overview

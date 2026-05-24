@@ -3,11 +3,13 @@ import { connectMongo } from '../../db';
 import { AccountModel } from '../../db/models';
 import { logger } from '../../logger';
 import { bullmqConnectionOpts } from '../../queue/connection';
+import { processDialogTurnJob } from '../../queue/processors/dialogTurn';
 import { processSendMessageJob } from '../../queue/processors/sendMessage';
-import { sendQueueName } from '../../queue/queues';
+import { DIALOG_TURN_QUEUE_NAME, sendQueueName } from '../../queue/queues';
 import { installShutdownHandlers, onShutdown } from '../../util/shutdown';
 
 const workers = new Map<string, Worker>();
+let dialogTurnWorker: Worker | null = null;
 
 let refreshing = false;
 let refreshPending = false;
@@ -38,7 +40,9 @@ async function refreshWorkers(): Promise<void> {
 
     for (const [name, w] of workers) {
       if (!wanted.has(name)) {
-        await w.close();
+        await w.close().catch((err) => {
+          logger.warn({ err, queue: name }, 'worker: close failed during refresh');
+        });
         workers.delete(name);
         logger.info({ queue: name }, 'worker: removed queue worker');
       }
@@ -83,6 +87,10 @@ async function closeAllWorkers(): Promise<void> {
   stopping = true;
   const list = [...workers.values()];
   workers.clear();
+  if (dialogTurnWorker) {
+    list.push(dialogTurnWorker);
+    dialogTurnWorker = null;
+  }
   await Promise.all(
     list.map((w) =>
       w.close().catch((err) => logger.error({ err }, 'worker: close failed during shutdown')),
@@ -90,10 +98,29 @@ async function closeAllWorkers(): Promise<void> {
   );
 }
 
+function ensureDialogTurnWorker(): void {
+  if (dialogTurnWorker) return;
+  const conn = bullmqConnectionOpts();
+  dialogTurnWorker = new Worker(
+    DIALOG_TURN_QUEUE_NAME,
+    async (job) => processDialogTurnJob(job),
+    { connection: conn, concurrency: 2 },
+  );
+  dialogTurnWorker.on('failed', (job, err) => {
+    logger.warn(
+      { queue: DIALOG_TURN_QUEUE_NAME, jobId: job?.id, err: String(err) },
+      'worker: dialog turn failed',
+    );
+  });
+  /** Kept out of `workers` — refreshWorkers only reconciles per-account send queues. */
+  logger.info({ queue: DIALOG_TURN_QUEUE_NAME }, 'worker: dialog-turn registered');
+}
+
 async function main(): Promise<void> {
   installShutdownHandlers();
   await connectMongo();
   logger.info('worker: started, refreshing workers every 15s');
+  ensureDialogTurnWorker();
   await refreshWorkers();
   const interval = setInterval(() => {
     refreshWorkers().catch((err) => logger.error({ err }, 'worker: refresh failed'));

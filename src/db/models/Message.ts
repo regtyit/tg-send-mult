@@ -41,10 +41,11 @@ const messageSchema = new Schema(
   { timestamps: true, collection: 'messages' },
 );
 
-// Deduplicate only within a campaign. This allows legitimate re-sends across future campaigns.
+/** At most one message row per contact per campaign (regardless of text variant / homoglyphs). */
 messageSchema.index(
-  { campaignId: 1, contactId: 1, textHash: 1 },
+  { campaignId: 1, contactId: 1 },
   {
+    name: 'campaignId_1_contactId_1',
     unique: true,
     partialFilterExpression: { campaignId: { $type: 'objectId' } },
   },

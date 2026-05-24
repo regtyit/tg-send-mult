@@ -3,6 +3,8 @@ import { bullmqConnectionOpts } from './connection';
 import { onShutdown } from '../util/shutdown';
 
 export const SEND_JOB_NAME = 'sendMessage';
+export const DIALOG_TURN_JOB_NAME = 'dialogTurn';
+export const DIALOG_TURN_QUEUE_NAME = 'dialog-turn';
 
 export function sendQueueName(accountId: string): string {
   /** BullMQ queue names cannot include ":". */
@@ -58,4 +60,38 @@ export function __resetQueueCacheForTests(): void {
 
 export interface SendMessageJobData {
   messageId: string;
+}
+
+export interface DialogTurnJobData {
+  sessionId: string;
+}
+
+let dialogTurnQueue: Queue | null = null;
+
+export function getDialogTurnQueue(): Queue {
+  ensureShutdownHook();
+  if (dialogTurnQueue) return dialogTurnQueue;
+  dialogTurnQueue = new Queue(DIALOG_TURN_QUEUE_NAME, {
+    connection: bullmqConnectionOpts(),
+    defaultJobOptions: {
+      attempts: 3,
+      backoff: { type: 'exponential' as const, delay: 10_000 },
+      removeOnComplete: { count: 200 },
+      removeOnFail: { count: 500 },
+    },
+  });
+  queueCache.set(DIALOG_TURN_QUEUE_NAME, dialogTurnQueue);
+  return dialogTurnQueue;
+}
+
+export async function enqueueDialogTurn(sessionId: string, delayMs = 0): Promise<void> {
+  const q = getDialogTurnQueue();
+  await q.add(
+    DIALOG_TURN_JOB_NAME,
+    { sessionId },
+    {
+      jobId: `dialog-${sessionId}-${Date.now()}`,
+      delay: Math.max(0, delayMs),
+    },
+  );
 }

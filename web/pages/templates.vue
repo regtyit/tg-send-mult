@@ -70,12 +70,21 @@
     >
       Failed to load templates: {{ loadErr }}
     </v-alert>
-    <v-list v-else-if="rows.length" class="mt-6 rounded border" lines="three">
-      <v-list-item v-for="t in rows" :key="t._id">
-        <v-list-item-title class="text-primary">{{ t.name }}</v-list-item-title>
-        <v-list-item-subtitle class="text-wrap">{{ t.body }}</v-list-item-subtitle>
-      </v-list-item>
-    </v-list>
+    <v-data-table
+      v-else-if="rows.length"
+      class="mt-6 elevation-1 rounded"
+      :headers="headers"
+      :items="rows"
+      density="compact"
+      :items-per-page="25"
+    >
+      <template #[`item.body`]="{ item }">
+        <span class="text-caption text-wrap">{{ item.body.slice(0, 120) }}{{ item.body.length > 120 ? '…' : '' }}</span>
+      </template>
+      <template #[`item.actions`]="{ item }">
+        <v-btn size="small" variant="text" color="error" @click="removeTemplate(item._id, item.name)">Delete</v-btn>
+      </template>
+    </v-data-table>
     <v-alert v-else type="info" variant="tonal" class="mt-6" density="compact">
       No templates yet. Save your first one above.
     </v-alert>
@@ -95,6 +104,7 @@ interface Template {
 
 const { apiFetch } = useBasicAuth();
 const toast = useToast();
+const { confirmDestructive } = useConfirm();
 const rows = ref<Template[]>([]);
 const name = ref('');
 const body = ref('');
@@ -102,6 +112,12 @@ const preview = ref('');
 const saving = ref(false);
 const loading = ref(true);
 const loadErr = ref('');
+
+const headers = [
+  { title: 'Name', key: 'name' },
+  { title: 'Preview', key: 'body', sortable: false },
+  { title: '', key: 'actions', sortable: false, width: '100px' },
+];
 
 const bodyLength = computed(() => body.value.length);
 const canSave = computed(
@@ -147,6 +163,18 @@ async function create(): Promise<void> {
     toast.error(errorText(e));
   } finally {
     saving.value = false;
+  }
+}
+
+async function removeTemplate(id: string, label: string): Promise<void> {
+  const ok = await confirmDestructive(`Delete template «${label}»? Campaigns using it will break.`);
+  if (!ok) return;
+  try {
+    await apiFetch(`/api/templates/${id}`, { method: 'DELETE' });
+    toast.success('Template deleted.');
+    await load();
+  } catch (e) {
+    toast.error(errorText(e));
   }
 }
 

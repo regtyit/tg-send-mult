@@ -1,5 +1,7 @@
+import { Types } from 'mongoose';
 import { CampaignModel } from '../../db/models';
 import { enqueueCampaignJobs } from './campaignEnqueue';
+import { assertCampaignPoolHasEligibleSenders } from './validateCampaignPool';
 
 export async function startCampaign(campaignId: string): Promise<void> {
   const existing = await CampaignModel.findById(campaignId).lean();
@@ -20,6 +22,8 @@ export async function startCampaign(campaignId: string): Promise<void> {
     { new: true },
   );
   if (!c) throw new Error('Campaign not found');
+  const pool = (c.accountPool ?? []).map((id) => new Types.ObjectId(String(id)));
+  await assertCampaignPoolHasEligibleSenders(pool);
   try {
     await enqueueCampaignJobs(c._id);
   } catch (err) {

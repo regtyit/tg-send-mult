@@ -113,6 +113,12 @@ export const proxyCreateBody = z
   })
   .strict();
 
+export const proxyTestBody = z
+  .object({
+    accountId: objectIdString.optional(),
+  })
+  .strict();
+
 export const proxyPatchBody = z
   .object({
     type: z.enum(['socks5', 'http', 'mtproto']).optional(),
@@ -228,8 +234,90 @@ export const inboundRepliesQuery = z
   .object({
     accountId: objectIdString.optional(),
     contactId: objectIdString.optional(),
+    dialogSessionId: objectIdString.optional(),
     limit: z.coerce.number().int().min(1).max(500).optional().default(100),
     skip: z.coerce.number().int().min(0).max(1_000_000).optional().default(0),
     paginated: z.coerce.boolean().optional().default(false),
+  })
+  .strict();
+
+const dialogTurnDefSchema = z
+  .object({
+    side: z.enum(['a', 'b']),
+    text: z.string().max(4096).optional().default(''),
+    templateId: objectIdString.optional(),
+    waitForText: z.string().max(500).optional().default(''),
+    delaySecMin: z.number().int().min(0).max(86_400).optional(),
+    delaySecMax: z.number().int().min(0).max(86_400).optional(),
+  })
+  .strict()
+  .refine((t) => Boolean(t.text?.trim()) || t.templateId, {
+    message: 'Each turn needs text or templateId',
+  });
+
+export const dialogScriptCreateBody = z
+  .object({
+    name: z.string().trim().min(1).max(200),
+    mode: z.enum(['turns', 'template_pairs']).optional().default('turns'),
+    turns: z.array(dialogTurnDefSchema).optional().default([]),
+    questionTemplateId: objectIdString.optional(),
+    answerTemplateId: objectIdString.optional(),
+    peerWaitText: z.string().max(500).optional().default(''),
+    rounds: z.number().int().min(1).max(100).optional().default(1),
+    defaultDelaySecMin: z.number().int().min(0).max(86_400).optional().default(30),
+    defaultDelaySecMax: z.number().int().min(0).max(86_400).optional().default(90),
+    typingSec: z.number().int().min(0).max(30).optional().default(3),
+    notes: z.string().max(2000).optional().default(''),
+  })
+  .strict();
+
+export const dialogScriptImportBody = z
+  .object({
+    name: z.string().trim().min(1).max(200),
+    csv: z.string().optional(),
+    json: z.string().optional(),
+    defaultDelaySecMin: z.number().int().min(0).optional(),
+    defaultDelaySecMax: z.number().int().min(0).optional(),
+    typingSec: z.number().int().min(0).max(30).optional(),
+  })
+  .strict()
+  .refine((b) => Boolean(b.csv?.trim() || b.json?.trim()), {
+    message: 'csv or json required',
+  });
+
+export const dialogPresetApplyBody = z
+  .object({
+    slug: z.string().trim().min(1).max(80),
+    replace: z.boolean().optional().default(false),
+  })
+  .strict();
+
+export const dialogSessionCreateBody = z
+  .object({
+    name: z.string().trim().max(200).optional().default(''),
+    scriptId: objectIdString,
+    accountAId: objectIdString,
+    peerType: z.enum(['account', 'contact']),
+    peerAccountId: objectIdString.optional(),
+    peerContactId: objectIdString.optional(),
+    runMode: z.enum(['auto', 'manual']).optional().default('manual'),
+  })
+  .strict();
+
+export const bulkImportBody = z
+  .object({
+    csv: z.string().optional(),
+    json: z.string().optional(),
+    testAfterImport: z.boolean().optional().default(false),
+  })
+  .strict()
+  .refine((b) => Boolean(b.csv?.trim() || b.json?.trim()), {
+    message: 'csv or json required',
+  });
+
+export const accountsBulkImportBody = z
+  .object({
+    csv: z.string().min(1),
+    defaultCountry: z.string().trim().max(8).optional(),
   })
   .strict();

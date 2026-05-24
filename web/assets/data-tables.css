@@ -1,0 +1,53 @@
+/* Fixed column widths with readable overflow: wrap long text inside the cell. */
+.data-table-fixed .v-table__wrapper {
+  overflow-x: auto;
+}
+
+.data-table-fixed .v-table__wrapper table {
+  table-layout: fixed;
+  width: 100%;
+  min-width: 720px;
+}
+
+.data-table-fixed th {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+
+.data-table-fixed td {
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  overflow: visible;
+  vertical-align: top;
+  line-height: 1.4;
+}
+
+.data-table-fixed td > * {
+  max-width: 100%;
+}
+
+.data-table-fixed td.cell-wrap,
+.data-table-fixed th.cell-wrap {
+  overflow: visible;
+}
+
+/* Use on text inside slots when you want a single-line ellipsis + native tooltip */
+.data-table-fixed .cell-clip {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Default for table text: wrap within the column (visible overflow) */
+.data-table-fixed .cell-overflow {
+  display: block;
+  max-width: 100%;
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}

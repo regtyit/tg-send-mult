@@ -14,6 +14,8 @@ const inboundReplySchema = new Schema(
     telegramMessageId: { type: Number, required: true },
     telegramDate: { type: Date, default: null, index: true },
     text: { type: String, default: '' },
+    readAt: { type: Date, default: null, index: true },
+    dialogSessionId: { type: Types.ObjectId, ref: 'DialogSession', default: null, index: true },
   },
   { timestamps: true, collection: 'inbound_replies' },
 );

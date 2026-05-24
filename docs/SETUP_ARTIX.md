@@ -1,8 +1,8 @@
 # Infrastructure on Artix Linux (OpenRC)
 
-This project needs **Node.js 20+**, **MongoDB**, and **Redis** running somewhere reachable from your machine. Below is a typical **local** setup on **Artix** (pacman + **OpenRC**, no systemd).
+This project needs **Node.js 20+**, **MongoDB**, and **Valkey** (or Redis — same protocol) running somewhere reachable from your machine. Below is a typical **local** setup on **Artix** (pacman + **OpenRC**, no systemd).
 
-If you already use MongoDB Atlas or a remote Redis, skip the install sections and only set `MONGO_URI` / `REDIS_`* in `.env`.
+If you already use MongoDB Atlas or a remote Valkey/Redis, skip the install sections and only set `MONGO_URI` / `REDIS_`* in `.env`.
 
 ---
 
@@ -10,7 +10,7 @@ If you already use MongoDB Atlas or a remote Redis, skip the install sections an
 
 ```bash
 sudo pacman -Syu
-sudo pacman -S git nodejs npm redis
+sudo pacman -S git nodejs npm valkey
 ```
 
 Check Node version (need ≥ 20):
@@ -41,33 +41,33 @@ python/.venv/bin/pip install TelethonFakeTLS
 
 ---
 
-## 2. Redis
+## 2. Valkey (BullMQ backend)
 
-Install (if not already):
+The app speaks the **Redis protocol** (`REDIS_*` in `.env`). On Artix use **[Valkey](https://valkey.io/)** (drop-in; package may also install `redis-cli` as a compatibility shim):
 
 ```bash
-sudo pacman -S redis
+sudo pacman -S valkey
 ```
 
-Default listen address is in `/etc/redis/redis.conf` (usually `127.0.0.1:6379`). For local dev, defaults match the project’s `.env.example`.
+Default listen address is in `/etc/valkey/valkey.conf` (`127.0.0.1:6379`, data in `/var/lib/valkey/`). For local dev, defaults match `.env.example`.
 
 **OpenRC — start now and on boot:**
 
 ```bash
-sudo rc-update add redis default
-sudo rc-service redis start
-sudo rc-service redis status
+sudo rc-update add valkey default
+sudo rc-service valkey start
+sudo rc-service valkey status
 ```
 
 Test:
 
 ```bash
-redis-cli ping
+valkey-cli ping
 ```
 
 Expect `PONG`.
 
-`**.env` (Redis block — defaults are fine for local):**
+**`.env` (unchanged variable names — point at Valkey on localhost):**
 
 ```env
 REDIS_HOST=127.0.0.1
@@ -75,7 +75,9 @@ REDIS_PORT=6379
 REDIS_PASSWORD=
 ```
 
-If you set `requirepass` in `redis.conf`, put the same value in `REDIS_PASSWORD`.
+If you set `requirepass` in `valkey.conf`, put the same value in `REDIS_PASSWORD`.
+
+> **Redis instead of Valkey:** `sudo pacman -S redis` works the same way (`redis-cli ping`, `REDIS_HOST=127.0.0.1`).
 
 ---
 
@@ -143,9 +145,9 @@ Create a free cluster, allow your IP (or `0.0.0.0/0` for testing only), get the 
 MONGO_URI=mongodb+srv://user:pass@cluster.mongodb.net/tg_send_mult?retryWrites=true&w=majority
 ```
 
-### Option C — Podman/Docker
+### Option C — Docker Compose (full stack)
 
-If you prefer containers, run official MongoDB and Redis images and point `.env` at the published ports (`27017`, `6379`). The repo does not ship compose files; this is entirely optional.
+See **[DOCKER.md](DOCKER.md)** — `docker compose` runs MongoDB, Valkey, API, worker, and scheduler. Dashboard: **http://127.0.0.1:3048**. Bind your existing data with `MONGO_DATA_DIR` and `VALKEY_DATA_DIR` in `.env` (`npm run docker:sync-data` copies `/var/lib/valkey/dump.rdb`).
 
 ---
 
@@ -174,7 +176,7 @@ Telegram **phone / auth key / DC / user id** are **not** set in `.env`; import t
 npm run cli -- auth import-mtp -p '+...' --dc <n> --auth-key-hex '<hex>' [--user-id '<id>']
 ```
 
-**Sanity-check `.env` + Mongo + Redis** (run anytime after filling `.env`):
+**Sanity-check `.env` + Mongo + Valkey** (run anytime after filling `.env`):
 
 ```bash
 npm run setup
@@ -233,7 +235,7 @@ npm run cli -- auth import-tdata -p +14155552671 --tdata "/path/to/Telegram Desk
 
 ## 6. Firewall (optional)
 
-If you bind the API to `0.0.0.0` and use a host firewall, open only the port you need (default **3000**). MongoDB and Redis should stay on **127.0.0.1** for a single-machine dev setup.
+If you bind the API to `0.0.0.0` and use a host firewall, open only the port you need (default **3000**). MongoDB and Valkey should stay on **127.0.0.1** for a single-machine dev setup.
 
 ---
 
@@ -242,12 +244,19 @@ If you bind the API to `0.0.0.0` and use a host firewall, open only the port you
 
 | Piece               | Role                          | Typical local check                                  |
 | ------------------- | ----------------------------- | ---------------------------------------------------- |
-| Redis               | BullMQ queues                 | `redis-cli ping` → `PONG`                            |
+| Valkey              | BullMQ queues                 | `valkey-cli ping` → `PONG`                           |
 | MongoDB             | Accounts, campaigns, contacts | `mongosh` connection OK                              |
 | `.env`              | App secrets + service URLs    | No placeholder `SESSION_KEY`; `npm run setup` passes |
-| `npm run setup`     | Validates env + Mongo + Redis | All three checks OK                                  |
+| `npm run setup`     | Validates env + Mongo + Valkey | All three checks OK                                  |
 | `npm run build:all` | Compiles TS + web             | Completes without errors                             |
 | Three dev processes | API, worker, scheduler        | Dashboard loads                                      |
 
 
-If something fails, check: Redis/Mongo really listening on the host/port in `.env`, and that `SESSION_KEY` is 64 hex characters.
+If something fails, check: Valkey/Mongo really listening on the host/port in `.env`, and that `SESSION_KEY` is 64 hex characters.
+
+---
+
+## Next steps
+
+After the dashboard loads, read the [User guide](USER_GUIDE.md) for senders,
+contacts, campaigns, and delivery verification.

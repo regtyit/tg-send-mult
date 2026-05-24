@@ -1,3 +1,5 @@
+import { describeSenderEligibility, formatEligibilityReasons } from '../../modules/multi/senderEligibility';
+
 /**
  * Strip sensitive fields from API responses.
  *
@@ -33,6 +35,18 @@ export function sanitizeAccount(doc: unknown): Record<string, unknown> | null {
   const out: Record<string, unknown> = { ...obj };
   out.hasSession = nonEmptyString(obj.sessionEnc);
   out.hasTelegramApiHash = nonEmptyString(obj.telegramApiHash);
+  const { eligible, reasons } = describeSenderEligibility({
+    sessionEnc: typeof obj.sessionEnc === 'string' ? obj.sessionEnc : '',
+    role: typeof obj.role === 'string' ? obj.role : 'sender',
+    status: typeof obj.status === 'string' ? obj.status : 'new',
+    healthScore: typeof obj.healthScore === 'number' ? obj.healthScore : 0,
+    floodWaitUntil: obj.floodWaitUntil instanceof Date ? obj.floodWaitUntil : null,
+    quarantineUntil: obj.quarantineUntil instanceof Date ? obj.quarantineUntil : null,
+  });
+  out.sendable = eligible;
+  if (!eligible && reasons.length) {
+    out.sendBlockReason = formatEligibilityReasons(reasons);
+  }
   for (const key of ACCOUNT_SENSITIVE_FIELDS) {
     delete out[key];
   }

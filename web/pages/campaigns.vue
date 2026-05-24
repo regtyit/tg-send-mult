@@ -179,10 +179,13 @@
           </span>
         </div>
         <template #append>
-          <v-btn size="small" variant="text" color="primary" @click="start(c._id, c.name)">Start</v-btn>
-          <v-btn size="small" variant="text" color="warning" @click="pause(c._id)">Pause</v-btn>
-          <v-btn size="small" variant="text" color="info" @click="showResults(c._id, c.name)">Results</v-btn>
-          <v-btn size="small" variant="text" color="secondary" @click="verify(c._id, c.name)">Verify</v-btn>
+          <div class="campaign-actions">
+            <v-btn size="small" variant="tonal" color="primary" @click="start(c._id, c.name)">Start</v-btn>
+            <v-btn size="small" variant="text" color="warning" @click="pause(c._id)">Pause</v-btn>
+            <v-btn size="small" variant="text" color="info" @click="showResults(c._id, c.name)">Results</v-btn>
+            <v-btn size="small" variant="text" color="secondary" @click="verify(c._id, c.name)">Verify</v-btn>
+            <v-btn size="small" variant="text" color="error" @click="removeCampaign(c._id, c.name)">Delete</v-btn>
+          </div>
         </template>
       </v-list-item>
     </v-list>
@@ -200,7 +203,26 @@
               {{ k }}: {{ v }}
             </v-chip>
           </div>
-          <v-data-table :headers="resultHeaders" :items="resultItems" :items-per-page="25" density="compact" />
+          <v-data-table
+            :headers="resultHeaders"
+            :items="resultItems"
+            :items-per-page="25"
+            :class="DATA_TABLE_CLASS"
+            density="compact"
+          >
+            <template #[`item.contact`]="{ item }">
+              <span class="cell-overflow" :title="String(item.contact)">{{ item.contact }}</span>
+            </template>
+            <template #[`item.account`]="{ item }">
+              <span class="cell-overflow" :title="String(item.account)">{{ item.account }}</span>
+            </template>
+            <template #[`item.text`]="{ item }">
+              <span class="cell-overflow" :title="String(item.text)">{{ item.text }}</span>
+            </template>
+            <template #[`item.error`]="{ item }">
+              <span class="cell-overflow text-error" :title="String(item.error)">{{ item.error || '—' }}</span>
+            </template>
+          </v-data-table>
         </v-card-text>
       </v-card>
     </v-dialog>
@@ -209,6 +231,7 @@
 
 <script setup lang="ts">
 import { errorText } from '~/composables/useToast';
+import { DATA_TABLE_CLASS, fixedCol } from '~/utils/tableColumns';
 
 interface Campaign {
   _id: string;
@@ -243,7 +266,7 @@ interface ContactRow {
 
 const { apiFetch } = useBasicAuth();
 const toast = useToast();
-const { confirm } = useConfirm();
+const { confirm, confirmDestructive } = useConfirm();
 const campaigns = ref<Campaign[]>([]);
 const accounts = ref<AccountRow[]>([]);
 const templates = ref<Template[]>([]);
@@ -264,13 +287,13 @@ const resultsTitle = ref('');
 const resultsSummary = ref<Record<string, number>>({});
 const resultItems = ref<Array<Record<string, string | number>>>([]);
 const resultHeaders = [
-  { title: 'Status', key: 'status' },
-  { title: 'Contact', key: 'contact' },
-  { title: 'Sender', key: 'account' },
-  { title: 'Message', key: 'text' },
-  { title: 'Attempts', key: 'attempts' },
-  { title: 'Error', key: 'error' },
-  { title: 'Sent at', key: 'sentAt' },
+  fixedCol('Status', 'status', 88),
+  fixedCol('Contact', 'contact', 120),
+  fixedCol('Sender', 'account', 110),
+  fixedCol('Message', 'text', 180),
+  fixedCol('Try', 'attempts', 56),
+  fixedCol('Error', 'error', 140),
+  fixedCol('Sent', 'sentAt', 120),
 ];
 
 function splitRefs(raw: string): string[] {
@@ -363,6 +386,10 @@ async function loadAll(): Promise<void> {
           phone: string;
           label?: string;
           telegramUsername?: string;
+          status?: string;
+          role?: string;
+          sendable?: boolean;
+          sendBlockReason?: string;
         }[]
       >('/api/accounts'),
       apiFetch<Template[]>('/api/templates'),
@@ -376,16 +403,23 @@ async function loadAll(): Promise<void> {
       >('/api/contacts'),
     ]);
     campaigns.value = c;
-    accounts.value = a.map((x) => ({
-      ...x,
-      pickerLabel: [
-        x.phone,
-        x.telegramUsername ? `@${x.telegramUsername}` : null,
-        x.label ? `(${x.label})` : null,
-      ]
-        .filter(Boolean)
-        .join(' '),
-    }));
+    accounts.value = a
+      .filter((x) => (x.role ?? 'sender') === 'sender')
+      .map((x) => ({
+        ...x,
+        pickerLabel: [
+          x.phone,
+          x.telegramUsername ? `@${x.telegramUsername}` : null,
+          x.label ? `(${x.label})` : null,
+          x.status ? `[${x.status}]` : null,
+          x.sendable === false ? `(not sendable: ${x.sendBlockReason ?? 'ineligible'})` : null,
+        ]
+          .filter(Boolean)
+          .join(' '),
+      }));
+    if (!pickedSenderIds.value.length) {
+      pickedSenderIds.value = accounts.value.filter((x) => x.sendable).map((x) => x._id);
+    }
     templates.value = t;
     contacts.value = ct.map((x) => ({
       ...x,
@@ -501,6 +535,20 @@ async function verify(id: string, campaignName: string): Promise<void> {
   }
 }
 
+async function removeCampaign(id: string, campaignName: string): Promise<void> {
+  const ok = await confirmDestructive(
+    `Delete campaign «${campaignName}» and all its message rows? This cannot be undone.`,
+  );
+  if (!ok) return;
+  try {
+    await apiFetch(`/api/campaigns/${id}`, { method: 'DELETE' });
+    toast.success('Campaign deleted.');
+    await loadAll();
+  } catch (e) {
+    toast.error(parseApiError(e));
+  }
+}
+
 async function showResults(id: string, campaignName: string): Promise<void> {
   try {
     const res = await apiFetch<{
@@ -536,3 +584,13 @@ async function showResults(id: string, campaignName: string): Promise<void> {
   }
 }
 </script>
+
+<style scoped>
+.campaign-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  justify-content: flex-end;
+  max-width: 320px;
+}
+</style>

@@ -57,6 +57,23 @@
       <v-btn color="primary" :loading="saving" :disabled="saving" @click="addProxy">Add proxy</v-btn>
     </v-card>
 
+    <BulkImportPanel
+      title="Bulk import proxies"
+      hint="CSV/JSON columns: label, type (mtproto|socks5|http), host, port, country, secret, login, password"
+      button-label="Import proxies"
+      :loading="bulkImporting"
+      :result-summary="bulkImportSummary"
+      @import="importProxiesBulk"
+    >
+      <template #extra-fields>
+        <v-checkbox v-model="testAfterImport" label="Test each proxy after import" density="compact" class="mt-1" />
+      </template>
+    </BulkImportPanel>
+
+    <v-btn color="secondary" variant="tonal" class="mb-4" :loading="testingAll" @click="testAllProxies">
+      Test all proxies
+    </v-btn>
+
     <v-alert
       v-if="loadErr"
       type="error"
@@ -69,6 +86,26 @@
       {{ loadErr }}
     </v-alert>
 
+    <v-card class="mb-4 pa-4" variant="tonal" color="primary">
+      <v-card-title class="text-subtitle-1 px-0 pt-0">Proxy test</v-card-title>
+      <p class="text-body-2 text-medium-emphasis mb-3">
+        Tests reach Telegram through the proxy using a real sender session (recommended) or an empty session.
+      </p>
+      <v-select
+        v-model="testAccountId"
+        :items="senderAccounts"
+        item-title="pickerLabel"
+        item-value="_id"
+        label="Sender account for test"
+        variant="outlined"
+        density="comfortable"
+        clearable
+        hint="Pick a logged-in sender to verify the proxy with the same API id/device as production"
+        persistent-hint
+        class="mb-0"
+      />
+    </v-card>
+
     <v-progress-circular v-if="loading && rows.length === 0" indeterminate />
     <v-alert v-else-if="!rows.length" type="info" variant="tonal" density="compact">
       No proxies yet. Add your first one above.
@@ -78,12 +115,31 @@
       :headers="headers"
       :items="rows"
       :items-per-page="50"
-      class="elevation-1 rounded"
+      :class="DATA_TABLE_CLASS"
+      density="compact"
     >
+      <template #[`item.label`]="{ item }">
+        <span class="cell-overflow" :title="item.label">{{ item.label }}</span>
+      </template>
+      <template #[`item.host`]="{ item }">
+        <span class="cell-overflow font-mono" :title="item.host">{{ item.host }}</span>
+      </template>
+      <template #[`item.lastTest`]="{ item }">
+        <span v-if="!item.lastTest" class="text-disabled">—</span>
+        <span
+          v-else
+          class="cell-overflow"
+          :class="item.lastTest.ok ? 'text-success' : 'text-error'"
+          :title="`${item.lastTest.code || item.lastTest.stage}: ${item.lastTest.message}`"
+        >
+          {{ item.lastTest.ok ? 'ok' : 'fail' }}
+          ({{ item.lastTest.durationMs }}ms)
+        </span>
+      </template>
       <template #[`item.actions`]="{ item }">
-        <v-btn size="small" variant="text" @click="openEdit(item)">edit</v-btn>
+        <v-btn size="x-small" variant="text" @click="openEdit(item)">edit</v-btn>
         <v-btn
-          size="small"
+          size="x-small"
           variant="text"
           :loading="testingId === item._id"
           :disabled="!!testingId && testingId !== item._id"
@@ -91,14 +147,7 @@
         >
           test
         </v-btn>
-        <v-btn size="small" variant="text" color="error" @click="removeProxy(item._id)">delete</v-btn>
-      </template>
-      <template #[`item.lastTest`]="{ item }">
-        <span v-if="!item.lastTest" class="text-disabled">—</span>
-        <span v-else :class="item.lastTest.ok ? 'text-success' : 'text-error'">
-          {{ item.lastTest.ok ? 'reachable' : 'unreachable' }}
-          <span class="text-disabled">({{ item.lastTest.code || item.lastTest.stage }} · {{ item.lastTest.durationMs }}ms)</span>
-        </span>
+        <v-btn size="x-small" variant="text" color="error" @click="removeProxy(item._id)">del</v-btn>
       </template>
     </v-data-table>
 
@@ -165,6 +214,7 @@
 
 <script setup lang="ts">
 import { errorText } from '~/composables/useToast';
+import { DATA_TABLE_CLASS, fixedCol } from '~/utils/tableColumns';
 
 interface ProxyTestResult {
   ok: boolean;
@@ -216,22 +266,58 @@ const editLogin = ref('');
 const editPassword = ref('');
 
 const testingId = ref<string | null>(null);
+const testAccountId = ref<string | null>(null);
+const senderAccounts = ref<Array<{ _id: string; pickerLabel: string }>>([]);
+const bulkImporting = ref(false);
+const bulkImportSummary = ref('');
+const testAfterImport = ref(false);
+const testingAll = ref(false);
 
 const headers = [
-  { title: 'Label', key: 'label' },
-  { title: 'Host', key: 'host' },
-  { title: 'Port', key: 'port' },
-  { title: 'Country', key: 'country' },
-  { title: 'Type', key: 'type' },
-  { title: 'Last test', key: 'lastTest', sortable: false },
-  { title: 'Actions', key: 'actions', sortable: false },
+  fixedCol('Label', 'label', 100),
+  fixedCol('Host', 'host', 160),
+  fixedCol('Port', 'port', 64),
+  fixedCol('CC', 'country', 56),
+  fixedCol('Type', 'type', 72),
+  fixedCol('Test', 'lastTest', 100, { sortable: false }),
+  fixedCol('', 'actions', 120, { sortable: false, wrap: true }),
 ];
 
 async function load(): Promise<void> {
   loading.value = true;
   loadErr.value = '';
   try {
-    rows.value = await apiFetch<ProxyRow[]>('/api/proxies');
+    const [proxies, accounts] = await Promise.all([
+      apiFetch<ProxyRow[]>('/api/proxies'),
+      apiFetch<
+        {
+          _id: string;
+          phone: string;
+          label?: string;
+          telegramUsername?: string;
+          role?: string;
+          hasSession?: boolean;
+          sendable?: boolean;
+        }[]
+      >('/api/accounts'),
+    ]);
+    rows.value = proxies;
+    senderAccounts.value = accounts
+      .filter((a) => (a.role ?? 'sender') === 'sender' && a.hasSession)
+      .map((a) => ({
+        _id: a._id,
+        pickerLabel: [
+          a.phone,
+          a.telegramUsername ? `@${a.telegramUsername}` : null,
+          a.label ? `(${a.label})` : null,
+          a.sendable ? null : '(not sendable)',
+        ]
+          .filter(Boolean)
+          .join(' '),
+      }));
+    if (!testAccountId.value && senderAccounts.value[0]) {
+      testAccountId.value = senderAccounts.value[0]._id;
+    }
   } catch (e) {
     loadErr.value = errorText(e);
   } finally {
@@ -273,6 +359,43 @@ async function addProxy(): Promise<void> {
     toast.error(errorText(e));
   } finally {
     saving.value = false;
+  }
+}
+
+async function importProxiesBulk(payload: { csv?: string; json?: string }): Promise<void> {
+  bulkImporting.value = true;
+  bulkImportSummary.value = '';
+  try {
+    const res = await apiFetch<{ imported: number; failed: number; results: Array<{ line: number; ok: boolean; label?: string; error?: string }> }>(
+      '/api/proxies/import',
+      {
+        method: 'POST',
+        body: JSON.stringify({ ...payload, testAfterImport: testAfterImport.value }),
+      },
+    );
+    bulkImportSummary.value = `Imported ${res.imported}, failed ${res.failed}`;
+    toast.success(bulkImportSummary.value);
+    await load();
+  } catch (e) {
+    toast.error(errorText(e));
+  } finally {
+    bulkImporting.value = false;
+  }
+}
+
+async function testAllProxies(): Promise<void> {
+  testingAll.value = true;
+  try {
+    const res = await apiFetch<{ total: number; ok: number; results: ProxyTestResult[] }>(
+      '/api/proxies/test-all',
+      { method: 'POST' },
+    );
+    toast.info(`Proxy tests: ${res.ok}/${res.total} OK`);
+    await load();
+  } catch (e) {
+    toast.error(errorText(e));
+  } finally {
+    testingAll.value = false;
   }
 }
 
@@ -328,6 +451,7 @@ async function testProxy(item: ProxyRow): Promise<void> {
   try {
     const result = await apiFetch<ProxyTestResult>(`/api/proxies/${item._id}/test`, {
       method: 'POST',
+      body: JSON.stringify(testAccountId.value ? { accountId: testAccountId.value } : {}),
     });
     item.lastTest = result;
     if (result.ok) {

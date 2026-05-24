@@ -1,7 +1,12 @@
 import type { Types } from 'mongoose';
 import { AccountModel } from '../../db/models';
 import { getSendQueue } from '../../queue/queues';
+import { senderEligibilityFilter } from './senderEligibility';
 
+/**
+ * Legacy load-based picker (lowest BullMQ queue depth). Campaign enqueue uses
+ * sticky + even distribution instead; kept for tests and optional future use.
+ */
 export async function pickAccountForSend(
   pool: Types.ObjectId[],
   now = new Date(),
@@ -10,14 +15,7 @@ export async function pickAccountForSend(
 
   const candidates = await AccountModel.find({
     _id: { $in: pool },
-    sessionEnc: { $ne: '' },
-    status: { $in: ['active', 'warming'] },
-    healthScore: { $gte: 0.5 },
-    $or: [{ role: { $exists: false } }, { role: 'sender' }],
-    $and: [
-      { $or: [{ floodWaitUntil: null }, { floodWaitUntil: { $lte: now } }] },
-      { $or: [{ quarantineUntil: null }, { quarantineUntil: { $lte: now } }] },
-    ],
+    ...senderEligibilityFilter(now),
   }).lean();
 
   if (!candidates.length) return null;

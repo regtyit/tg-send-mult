@@ -9,6 +9,11 @@ import { TgDomainError } from '../../telegram/errors';
 import { proxyDocToTelethonPayload } from '../../telegram/proxyPayload';
 import { runTelethonBridgeAsync, telethonCommon, unwrapTelethonBridge } from '../../telegram/pythonBridge';
 import { decryptSessionStringForAccount } from '../../telegram/sessionString';
+import { markInboundRepliesReadInDb } from './markInboundReadInDb';
+import {
+  accountDueForInboundSync,
+  sinceEpochForInboundSync,
+} from '../sync/timing';
 
 interface BridgeIncomingItem {
   messageId: number;
@@ -25,6 +30,7 @@ interface BridgeIncomingResult {
   items: BridgeIncomingItem[];
   dialogsScanned?: number;
   dialogsMarkedRead?: number;
+  peersMarkedRead?: string[];
 }
 
 export interface SyncInboundOptions {
@@ -34,7 +40,22 @@ export interface SyncInboundOptions {
    * force-sync triggered explicitly by the user.
    */
   markRead?: boolean;
+  /** Override list_incoming sinceEpochSec (unix seconds). */
+  sinceEpochSec?: number;
+  /** First-sync lookback window (seconds). Defaults to INBOUND_SYNC_LOOKBACK_SEC. */
+  lookbackSec?: number;
+  /** Skip per-account interval throttle (manual "Sync inbox"). */
+  force?: boolean;
 }
+
+export interface SyncInboundSkipResult {
+  skipped: true;
+  reason: 'interval';
+}
+
+export type SyncInboundResult =
+  | { saved: number; scanned: number; markedRead: number; skipped?: false }
+  | SyncInboundSkipResult;
 
 function normalizePhone(raw: string): string {
   return String(raw || '').replace(/[^\d+]/g, '');
@@ -87,12 +108,17 @@ export async function syncInboundRepliesForAccount(
   account: AccountDoc,
   proxy: ProxyDoc | null,
   options: SyncInboundOptions = {},
-): Promise<{ saved: number; scanned: number; markedRead: number }> {
+): Promise<SyncInboundResult> {
+  if (!accountDueForInboundSync(account, { force: options.force })) {
+    return { skipped: true, reason: 'interval' };
+  }
+
   const creds = telegramApiCredentialsForAccount(account);
   const proxyPayload = proxyDocToTelethonPayload(proxy);
-  const sinceEpochSec = account.lastInboundSyncAt
-    ? Math.max(0, Math.floor(account.lastInboundSyncAt.getTime() / 1000) - 120)
-    : 0;
+  const sinceEpochSec = sinceEpochForInboundSync(account, {
+    sinceEpochSec: options.sinceEpochSec,
+    lookbackSec: options.lookbackSec,
+  });
 
   const result = unwrapTelethonBridge<BridgeIncomingResult>(
     await runTelethonBridgeAsync({
@@ -111,13 +137,22 @@ export async function syncInboundRepliesForAccount(
   const scanned = result.dialogsScanned ?? 0;
   const markedRead = result.dialogsMarkedRead ?? 0;
 
+  const touchLastSync = async (at: Date) => {
+    await AccountModel.updateOne({ _id: account._id }, { $set: { lastInboundSyncAt: at } });
+  };
+
   if (!items.length) {
+    await touchLastSync(new Date());
     return { saved: 0, scanned, markedRead };
   }
 
   const maps = await loadContactMaps();
   const docs = items
-    .filter((x) => x.messageId > 0 && String(x.peerUserId || '').trim() && String(x.text || '').trim())
+    .filter((x) => {
+      if (x.messageId <= 0 || !String(x.peerUserId || '').trim()) return false;
+      if (String(x.text || '').trim()) return true;
+      return options.markRead === true && x.direction !== 'outgoing';
+    })
     .map((x) => {
       const contactId = resolveContactId(x, maps);
       return {
@@ -134,27 +169,30 @@ export async function syncInboundRepliesForAccount(
       };
     });
 
+  const readAt = options.markRead === true ? new Date() : null;
+  const peersMarkedRead = result.peersMarkedRead ?? [];
   let saved = 0;
   let maxEpochSec = sinceEpochSec;
   for (const doc of docs) {
     const epochSec = Math.floor((doc.telegramDate?.getTime() ?? 0) / 1000);
     if (epochSec > maxEpochSec) maxEpochSec = epochSec;
-    const res = await InboundReplyModel.updateOne(
-      {
-        accountId: doc.accountId,
-        peerUserId: doc.peerUserId,
-        telegramMessageId: doc.telegramMessageId,
-      },
-      { $setOnInsert: doc },
-      { upsert: true },
-    );
+    const filter = {
+      accountId: doc.accountId,
+      peerUserId: doc.peerUserId,
+      telegramMessageId: doc.telegramMessageId,
+    };
+    const res = await InboundReplyModel.updateOne(filter, { $setOnInsert: doc }, { upsert: true });
     if ((res.upsertedCount ?? 0) > 0) saved += 1;
+    if (readAt && doc.direction === 'incoming') {
+      await InboundReplyModel.updateOne(filter, { $set: { readAt } });
+    }
   }
 
-  await AccountModel.updateOne(
-    { _id: account._id },
-    { $set: { lastInboundSyncAt: maxEpochSec > 0 ? new Date(maxEpochSec * 1000) : new Date() } },
-  );
+  if (readAt && peersMarkedRead.length) {
+    await markInboundRepliesReadInDb(account._id, peersMarkedRead);
+  }
+
+  await touchLastSync(maxEpochSec > 0 ? new Date(maxEpochSec * 1000) : new Date());
   return { saved, scanned, markedRead };
 }
 

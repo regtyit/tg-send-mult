@@ -22,12 +22,22 @@
     "setup": "ts-node --transpile-only src/apps/cli/setupDoctor.ts",
     "setup:python": "cd python && python3 -m venv .venv && .venv/bin/pip install -U pip && .venv/bin/pip install -r requirements.txt",
     "migrate:message-dedup": "ts-node --transpile-only src/apps/cli/migrateMessageDedupIndex.ts",
+    "migrate:contact-phone-index": "ts-node --transpile-only src/apps/cli/migrateContactPhoneIndex.ts",
+    "migrate:campaign-contact-dedup": "ts-node --transpile-only src/apps/cli/migrateCampaignContactDedupIndex.ts",
+    "seed:qa-dialogs": "NODE_ENV=development ts-node --transpile-only src/seeds/runSeedQaDialogs.ts",
     "lint": "eslint src tests",
     "format": "prettier --write \"src/**/*.ts\"",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "check": "npm run typecheck && npm run lint && npm test"
+    "check": "npm run typecheck && npm run lint && npm test",
+    "docker:doctor": "bash docker/doctor.sh",
+    "docker:sync-data": "bash docker/sync-local-data.sh",
+    "docker:build": "bash docker/compose.sh build",
+    "docker:up": "bash docker/compose.sh up -d",
+    "docker:down": "bash docker/compose.sh down",
+    "docker:logs": "bash docker/compose.sh logs -f",
+    "docker:ps": "bash docker/compose.sh ps"
   },
   "dependencies": {
     "@bull-board/api": "^6.5.0",

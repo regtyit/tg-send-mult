@@ -13,3 +13,5 @@ web/.nuxt
 src/apps/api/public
 sessions/
 python/.venv
+docker/redis-data
+docker/valkey-data

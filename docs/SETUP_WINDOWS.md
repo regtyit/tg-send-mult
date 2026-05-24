@@ -170,8 +170,8 @@ npm run cli -- accounts list
 npm run cli -- send-test --account <id> --to me --text "hello"
 ```
 
-Then follow the
-[End-to-end test workflow](../README.md#end-to-end-test-workflow) in the README.
+Then continue with the [User guide](USER_GUIDE.md) or the
+[End-to-end verification workflow](../README.md#end-to-end-verification-workflow) in the README.
 
 ---
 

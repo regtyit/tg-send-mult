@@ -5,7 +5,8 @@ export type ContactStatus = (typeof CONTACT_STATUSES)[number];
 
 const contactSchema = new Schema(
   {
-    phoneE164: { type: String, default: '', trim: true },
+    /** Omitted when the contact is identified by username only. */
+    phoneE164: { type: String, trim: true },
     username: { type: String, default: '' },
     userId: { type: String, default: '' },
     accessHash: { type: String, default: '' },
@@ -43,7 +44,7 @@ contactSchema.index(
   { phoneE164: 1 },
   {
     unique: true,
-    partialFilterExpression: { phoneE164: { $type: 'string', $ne: '' } },
+    partialFilterExpression: { phoneE164: { $exists: true, $gt: '' } },
   },
 );
 contactSchema.index({ username: 1 }, { sparse: true });

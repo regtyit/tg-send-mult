@@ -117,3 +117,8 @@ export function useBasicAuth() {
 
   return { saveAuth, clearAuth, hasAuth, apiFetch };
 }
+
+/** Alias for pages that call `useApi()` — same as `useBasicAuth()`. */
+export function useApi() {
+  return useBasicAuth();
+}

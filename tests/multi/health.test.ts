@@ -12,6 +12,13 @@ describe('recomputeHealthScore', () => {
     expect(s).toBeLessThanOrEqual(1);
   });
 
+  it('gives full score when there is no send activity yet', () => {
+    const idle = {
+      healthMetrics: { sent24h: 0, failed24h: 0, floodWait24h: 0, peerFlood24h: 0 },
+    } as AccountDoc;
+    expect(recomputeHealthScore(idle)).toBe(1);
+  });
+
   it('penalizes peer flood metrics', () => {
     const clean = { healthMetrics: { sent24h: 100, failed24h: 0, floodWait24h: 0, peerFlood24h: 0 } } as AccountDoc;
     const bad = { healthMetrics: { sent24h: 100, failed24h: 0, floodWait24h: 0, peerFlood24h: 10 } } as AccountDoc;

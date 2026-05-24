@@ -7,3 +7,6 @@ export * from './Proxy';
 export * from './SessionEvent';
 export * from './DeliveryEvent';
 export * from './InboundReply';
+export * from './DialogScript';
+export * from './DialogSession';
+export * from './DialogTurn';

@@ -47,6 +47,7 @@ const navInternal = [
   { title: 'Contacts', to: '/contacts' },
   { title: 'Templates', to: '/templates' },
   { title: 'Campaigns', to: '/campaigns' },
+  { title: 'Dialogs', to: '/dialogs' },
 ];
 
 async function logout(): Promise<void> {

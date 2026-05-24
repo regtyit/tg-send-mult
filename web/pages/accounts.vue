@@ -163,6 +163,15 @@
       </v-row>
     </v-card>
 
+    <BulkImportPanel
+      title="Bulk import senders (CSV)"
+      hint="Columns: phone, label, role, sessionPath (tdata dir/zip or .json on server), proxyLabel"
+      button-label="Bulk import"
+      :loading="bulkImporting"
+      :result-summary="bulkImportSummary"
+      @import="bulkImportAccounts"
+    />
+
     <v-progress-circular v-if="loading && rows.length === 0" indeterminate />
     <v-alert v-else-if="!rows.length && !loading" type="info" variant="tonal" density="compact">
       No sending accounts yet. Add a row above or run <code>npm run cli -- auth login</code>.
@@ -172,9 +181,18 @@
       :headers="headers"
       :items="rows"
       :items-per-page="50"
-      class="elevation-1 rounded"
-      density="comfortable"
+      :class="DATA_TABLE_CLASS"
+      density="compact"
     >
+      <template #[`item.phone`]="{ item }">
+        <span class="cell-overflow" :title="item.phone">{{ item.phone }}</span>
+        <span v-if="item.telegramUsername" class="text-caption font-mono d-block text-medium-emphasis">
+          @{{ item.telegramUsername }}
+        </span>
+      </template>
+      <template #[`item.label`]="{ item }">
+        <span class="cell-overflow" :title="item.label || ''">{{ item.label || '—' }}</span>
+      </template>
       <template #[`item.role`]="{ item }">
         <v-select
           :model-value="item.role ?? 'sender'"
@@ -190,72 +208,135 @@
         />
       </template>
       <template #[`item.telegramUsername`]="{ item }">
-        <span v-if="item.telegramUsername" class="font-mono">@{{ item.telegramUsername }}</span>
-        <span v-else class="text-medium-emphasis">— after login</span>
+        <span v-if="item.telegramUsername" class="cell-overflow font-mono">@{{ item.telegramUsername }}</span>
+        <span v-else class="text-medium-emphasis">—</span>
+      </template>
+      <template #[`item.status`]="{ item }">
+        <span class="cell-overflow">{{ item.status }}</span>
       </template>
       <template #[`item.healthScore`]="{ item }">
-        {{ item.healthScore?.toFixed?.(2) ?? '—' }}
+        <span class="cell-overflow">{{ item.healthScore?.toFixed?.(2) ?? '—' }}</span>
       </template>
       <template #[`item.daily`]="{ item }">
-        {{ item.dailyCounters?.msgsToNew ?? 0 }} / {{ item.dailyLimits?.msgsToNew ?? '—' }}
-        <span class="text-medium-emphasis text-caption d-block">
-          ≤{{ item.dailyLimits?.ratePerHour ?? '—' }} msg/h per worker
+        <span class="cell-overflow">
+          {{ item.dailyCounters?.msgsToNew ?? 0 }} / {{ item.dailyLimits?.msgsToNew ?? '—' }}
+          <span class="text-medium-emphasis text-caption d-block">
+            ≤{{ item.dailyLimits?.ratePerHour ?? '—' }} msg/h
+          </span>
         </span>
       </template>
       <template #[`item.telegramApi`]="{ item }">
-        <span v-if="item.telegramApiId" class="text-caption font-mono">
+        <span v-if="item.telegramApiId" class="cell-overflow text-caption font-mono">
           {{ item.telegramApiId }}
-          <span v-if="item.telegramApiHash" class="text-medium-emphasis"> · hash set</span>
+          <span v-if="item.hasTelegramApiHash" class="text-medium-emphasis"> · hash</span>
         </span>
         <span v-else class="text-medium-emphasis">—</span>
       </template>
       <template #[`item.deviceProfile`]="{ item }">
-        <div class="text-caption">
-          <div>{{ item.deviceProfile?.deviceModel || '—' }}</div>
-          <div class="text-medium-emphasis">
-            {{ item.deviceProfile?.systemVersion || '—' }} / {{ item.deviceProfile?.appVersion || '—' }}
-          </div>
-          <div class="text-medium-emphasis">
-            {{ item.deviceProfile?.langCode || '—' }} / {{ item.deviceProfile?.systemLangCode || '—' }}
-          </div>
-        </div>
+        <span
+          class="cell-overflow text-caption"
+          :title="[
+            item.deviceProfile?.deviceModel,
+            item.deviceProfile?.systemVersion,
+            item.deviceProfile?.appVersion,
+          ]
+            .filter(Boolean)
+            .join(' / ')"
+        >
+          {{ item.deviceProfile?.deviceModel || '—' }}
+        </span>
       </template>
       <template #[`item.proxy`]="{ item }">
-        <span>{{ proxyLabel(item.proxyId) }}</span>
+        <span class="cell-overflow" :title="proxyLabel(item.proxyId)">{{ proxyLabel(item.proxyId) }}</span>
       </template>
       <template #[`item.actions`]="{ item }">
-        <v-btn size="small" variant="text" color="primary" @click="setStatus(item._id, 'active')">
-          active
-        </v-btn>
-        <v-btn size="small" variant="text" color="warning" @click="setStatus(item._id, 'paused')">
-          pause
-        </v-btn>
-        <v-btn size="small" variant="text" color="error" @click="setStatus(item._id, 'quarantined')">
-          quarantine
-        </v-btn>
-        <v-btn size="small" variant="text" color="secondary" @click="sendTestFrom(item._id)">
-          send test
-        </v-btn>
-        <v-btn size="small" variant="text" color="secondary" @click="syncInbox(item._id)">
-          sync inbox
-        </v-btn>
-        <v-select
-          :model-value="selectedProxyByAccount[item._id] ?? ''"
-          :items="proxyOptionsForAccount(item._id)"
-          item-title="label"
-          item-value="_id"
-          label="Proxy"
-          variant="outlined"
-          density="compact"
-          hide-details
-          class="d-inline-block mx-2"
-          style="max-width: 210px"
-          @update:model-value="(v) => setSelectedProxy(item._id, String(v ?? ''))"
-        />
-        <v-btn size="small" variant="text" color="primary" @click="assignSelectedMtproxy(item._id)">assign</v-btn>
-        <v-btn size="small" variant="text" color="primary" @click="autoAssignMtproxy(item._id)">auto</v-btn>
-        <v-btn size="small" variant="text" color="default" @click="clearMtproxy(item._id)">clear proxy</v-btn>
-        <v-btn size="small" variant="text" color="error" @click="removeSender(item._id)">delete</v-btn>
+        <div class="account-actions">
+          <div class="account-actions__icons">
+            <v-tooltip text="Activate" location="top">
+              <template #activator="{ props: tp }">
+                <v-btn
+                  v-bind="tp"
+                  icon="mdi-play-circle-outline"
+                  size="x-small"
+                  variant="text"
+                  color="success"
+                  aria-label="Set active"
+                  @click="setStatus(item._id, 'active')"
+                />
+              </template>
+            </v-tooltip>
+            <v-tooltip text="Pause" location="top">
+              <template #activator="{ props: tp }">
+                <v-btn
+                  v-bind="tp"
+                  icon="mdi-pause-circle-outline"
+                  size="x-small"
+                  variant="text"
+                  aria-label="Pause"
+                  @click="setStatus(item._id, 'paused')"
+                />
+              </template>
+            </v-tooltip>
+            <v-tooltip text="Send test" location="top">
+              <template #activator="{ props: tp }">
+                <v-btn
+                  v-bind="tp"
+                  icon="mdi-send-outline"
+                  size="x-small"
+                  variant="text"
+                  aria-label="Send test"
+                  @click="sendTestFrom(item._id)"
+                />
+              </template>
+            </v-tooltip>
+            <v-tooltip text="Sync inbox" location="top">
+              <template #activator="{ props: tp }">
+                <v-btn
+                  v-bind="tp"
+                  icon="mdi-inbox-arrow-down-outline"
+                  size="x-small"
+                  variant="text"
+                  aria-label="Sync inbox"
+                  @click="syncInbox(item._id)"
+                />
+              </template>
+            </v-tooltip>
+            <v-menu location="bottom end">
+              <template #activator="{ props: menuProps }">
+                <v-btn
+                  v-bind="menuProps"
+                  icon="mdi-dots-vertical"
+                  size="x-small"
+                  variant="text"
+                  aria-label="More actions"
+                />
+              </template>
+              <v-list density="compact" min-width="200">
+                <v-list-item title="Quarantine" @click="setStatus(item._id, 'quarantined')" />
+                <v-list-item title="Auto-assign proxy" @click="autoAssignMtproxy(item._id)" />
+                <v-list-item title="Clear proxy" @click="clearMtproxy(item._id)" />
+                <v-divider />
+                <v-list-item title="Delete account" class="text-error" @click="removeSender(item._id)" />
+              </v-list>
+            </v-menu>
+          </div>
+          <div class="account-actions__proxy">
+            <v-select
+              :model-value="selectedProxyByAccount[item._id] ?? ''"
+              :items="proxyOptionsForAccount(item._id)"
+              item-title="label"
+              item-value="_id"
+              label="Proxy"
+              variant="outlined"
+              density="compact"
+              hide-details
+              @update:model-value="(v) => setSelectedProxy(item._id, String(v ?? ''))"
+            />
+            <v-btn size="x-small" variant="tonal" color="primary" block @click="assignSelectedMtproxy(item._id)">
+              Assign
+            </v-btn>
+          </div>
+        </div>
       </template>
     </v-data-table>
   </div>
@@ -263,13 +344,14 @@
 
 <script setup lang="ts">
 import { errorText } from '~/composables/useToast';
+import { DATA_TABLE_CLASS, fixedCol } from '~/utils/tableColumns';
 
 interface Account {
   _id: string;
   phone: string;
   label?: string;
   telegramApiId?: number | null;
-  telegramApiHash?: string;
+  hasTelegramApiHash?: boolean;
   telegramUsername?: string;
   proxyId?: string | null;
   status: string;
@@ -312,6 +394,8 @@ const newSystemLangCode = ref('');
 const newTelegramApiId = ref('');
 const newTelegramApiHash = ref('');
 const importingTdata = ref(false);
+const bulkImporting = ref(false);
+const bulkImportSummary = ref('');
 const importingJson = ref(false);
 const importPhone = ref('');
 const importTdataPath = ref('');
@@ -320,17 +404,17 @@ const importProxyId = ref('');
 const importRole = ref<'sender' | 'test_recipient'>('sender');
 
 const headers = [
-  { title: 'Phone', key: 'phone' },
-  { title: 'Label', key: 'label' },
-  { title: 'Role', key: 'role' },
-  { title: 'TG API', key: 'telegramApi', sortable: false },
-  { title: 'Telegram @', key: 'telegramUsername' },
-  { title: 'Proxy', key: 'proxy', sortable: false },
-  { title: 'Status', key: 'status' },
-  { title: 'Health', key: 'healthScore' },
-  { title: 'Sent today / limit', key: 'daily' },
-  { title: 'Device profile', key: 'deviceProfile', sortable: false },
-  { title: 'Actions', key: 'actions', sortable: false },
+  fixedCol('Phone', 'phone', 130),
+  fixedCol('Label', 'label', 90),
+  fixedCol('Role', 'role', 118, { sortable: false }),
+  fixedCol('API', 'telegramApi', 72, { sortable: false }),
+  fixedCol('@user', 'telegramUsername', 100),
+  fixedCol('Proxy', 'proxy', 88, { sortable: false }),
+  fixedCol('Status', 'status', 88),
+  fixedCol('Health', 'healthScore', 64),
+  fixedCol('Today', 'daily', 96, { sortable: false }),
+  fixedCol('Device', 'deviceProfile', 100, { sortable: false }),
+  fixedCol('Actions', 'actions', 200, { sortable: false, wrap: true }),
 ];
 
 function proxyOptionsForAccount(accountId: string): ProxyRow[] {
@@ -464,6 +548,28 @@ async function importJson(): Promise<void> {
     toast.error(errorText(e));
   } finally {
     importingJson.value = false;
+  }
+}
+
+async function bulkImportAccounts(payload: { csv?: string }): Promise<void> {
+  if (!payload.csv?.trim()) {
+    toast.warning('Bulk import requires CSV.');
+    return;
+  }
+  bulkImporting.value = true;
+  bulkImportSummary.value = '';
+  try {
+    const res = await apiFetch<{ imported: number; failed: number }>('/api/accounts/bulk-import', {
+      method: 'POST',
+      body: JSON.stringify({ csv: payload.csv }),
+    });
+    bulkImportSummary.value = `Imported ${res.imported}, failed ${res.failed}`;
+    toast.success(bulkImportSummary.value);
+    await load();
+  } catch (e) {
+    toast.error(errorText(e));
+  } finally {
+    bulkImporting.value = false;
   }
 }
 
@@ -610,3 +716,26 @@ async function syncInbox(id: string): Promise<void> {
   }
 }
 </script>
+
+<style scoped>
+.account-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.account-actions__icons {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+}
+
+.account-actions__proxy {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+</style>

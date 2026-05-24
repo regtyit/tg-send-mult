@@ -61,7 +61,8 @@ export async function verifyCampaignDelivery(campaignId: string): Promise<Verify
   for (const acc of testAccounts) {
     const proxy = acc.proxyId ? await ProxyModel.findById(acc.proxyId) : null;
     try {
-      const r = await syncInboundRepliesForAccount(acc, proxy, { markRead: true });
+      const r = await syncInboundRepliesForAccount(acc, proxy, { markRead: true, force: true });
+      if ('skipped' in r && r.skipped) continue;
       scannedDialogs += r.scanned;
       savedTotal += r.saved;
     } catch (err) {

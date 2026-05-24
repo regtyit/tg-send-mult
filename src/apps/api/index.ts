@@ -34,6 +34,8 @@ import { installShutdownHandlers, onShutdown } from '../../util/shutdown';
 import { syncInboundRepliesForAccount } from '../../modules/messaging/syncInboundReplies';
 import { verifyCampaignDelivery } from '../../modules/messaging/verifyCampaign';
 import { testProxy } from '../../modules/proxy/test';
+import { registerBulkRoutes } from './routes/bulk';
+import { registerDialogRoutes } from './routes/dialogs';
 import {
   sanitizeAccount,
   sanitizeAccounts,
@@ -57,6 +59,7 @@ import {
   messagesQuery,
   proxyCreateBody,
   proxyPatchBody,
+  proxyTestBody,
   templateCreateBody,
   validate,
 } from './validation';
@@ -416,7 +419,13 @@ async function main() {
         const account = await AccountModel.findById(params.id);
         if (!account) return reply.code(404).send({ error: 'not found' });
         const proxy = account.proxyId ? await ProxyModel.findById(account.proxyId) : null;
-        const result = await syncInboundRepliesForAccount(account, proxy, { markRead: true });
+        const result = await syncInboundRepliesForAccount(account, proxy, {
+          markRead: true,
+          force: true,
+        });
+        if ('skipped' in result && result.skipped) {
+          return { ok: true, accountId: String(account._id), skipped: true, reason: result.reason };
+        }
         return {
           ok: true,
           accountId: String(account._id),
@@ -536,9 +545,22 @@ async function main() {
       r.post('/proxies/:id/test', async (req, reply) => {
         const params = validate(reply, idParams, req.params, 'params');
         if (!params) return;
+        const body = validate(reply, proxyTestBody, req.body ?? {});
+        if (!body) return;
         const proxy = await ProxyModel.findById(params.id);
         if (!proxy) return reply.code(404).send({ error: 'not found' });
-        return testProxy(proxy);
+        let account = null;
+        if (body.accountId) {
+          account = await AccountModel.findById(body.accountId);
+          if (!account) return reply.code(404).send({ error: 'account not found' });
+          if (!account.sessionEnc?.trim()) {
+            return reply.code(400).send({
+              error: 'account_no_session',
+              message: 'Selected sender has no saved session. Import or log in first.',
+            });
+          }
+        }
+        return testProxy(proxy, { account });
       });
 
       r.post('/contacts/import', async (req, reply) => {
@@ -675,6 +697,22 @@ async function main() {
         return result;
       });
 
+      r.delete('/campaigns/:id', async (req, reply) => {
+        const params = validate(reply, idParams, req.params, 'params');
+        if (!params) return;
+        try {
+          const { deleteCampaign: removeCampaign } = await import(
+            '../../modules/messaging/deleteCampaign'
+          );
+          const r = await removeCampaign(params.id);
+          return { ok: true, messagesRemoved: r.messagesRemoved };
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          if (msg.includes('not found')) return reply.code(404).send({ error: 'not_found' });
+          throw err;
+        }
+      });
+
       r.get('/campaigns/:id/results', async (req, reply) => {
         const params = validate(reply, idParams, req.params, 'params');
         if (!params) return;
@@ -768,6 +806,7 @@ async function main() {
         const filter: Record<string, unknown> = {};
         if (q.accountId) filter.accountId = new Types.ObjectId(q.accountId);
         if (q.contactId) filter.contactId = new Types.ObjectId(q.contactId);
+        if (q.dialogSessionId) filter.dialogSessionId = new Types.ObjectId(q.dialogSessionId);
         const wantsPaginated = q.paginated || q.skip > 0;
         if (!wantsPaginated) {
           return InboundReplyModel.find(filter).sort({ telegramDate: -1, createdAt: -1 }).limit(q.limit).lean();
@@ -782,6 +821,9 @@ async function main() {
         ]);
         return { items, total, limit: q.limit, skip: q.skip };
       });
+
+      await registerDialogRoutes(r);
+      await registerBulkRoutes(r);
     },
     { prefix: '/api' },
   );

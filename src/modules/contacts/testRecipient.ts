@@ -25,17 +25,20 @@ export async function ensureContactForTestRecipient(account: Pick<AccountDoc, 'p
       }).lean();
 
   const tags = [...new Set([...(existing?.tags ?? []), 'test_recipient'])];
+  const phone = phoneE164 || existing?.phoneE164 || '';
   const setDoc = {
-    phoneE164: phoneE164 || existing?.phoneE164 || '',
     username: username || existing?.username || '',
     firstName: existing?.firstName || '',
     lastName: existing?.lastName || '',
     tags,
     importedFrom: existing?.importedFrom || 'account:test_recipient',
     extras: existing?.extras || {},
+    ...(phone ? { phoneE164: phone } : {}),
   };
   if (existing?._id) {
-    await ContactModel.findByIdAndUpdate(existing._id, { $set: setDoc });
+    const update: { $set: typeof setDoc; $unset?: { phoneE164: 1 } } = { $set: setDoc };
+    if (!phone) update.$unset = { phoneE164: 1 };
+    await ContactModel.findByIdAndUpdate(existing._id, update);
   } else {
     await ContactModel.create(setDoc);
   }

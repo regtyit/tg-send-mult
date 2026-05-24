@@ -13,6 +13,7 @@ import { lognormalDelayMs } from '../../modules/antilimit/jitter';
 import { isWithinCampaignWindow, isWithinSendingWindowAccount } from '../../modules/antilimit/window';
 import { sendText } from '../../modules/messaging/send';
 import { recomputeHealthScore } from '../../modules/multi/health';
+import { persistSenderLink } from '../../modules/multi/stickyAssignment';
 import type { SendMessageJobData } from '../queues';
 import { mapTgError, TgDomainError } from '../../telegram/errors';
 import { config } from '../../config';
@@ -242,6 +243,8 @@ export async function processSendMessageJob(
     account.lastErrorCode = '';
     account.lastErrorMessage = '';
     await account.save();
+
+    await persistSenderLink(contact._id, account._id);
 
     if (msg.campaignId) {
       await CampaignModel.updateOne({ _id: msg.campaignId }, { $inc: { 'stats.sent': 1 } });

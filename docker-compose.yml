@@ -1,0 +1,83 @@
+# Local deploy: http://127.0.0.1:3048 (dashboard + API + Bull Board)
+#
+# Uses project `.env` plus overrides for in-compose Mongo/Valkey hostnames.
+# Bind local Mongo data (optional):
+#   MONGO_DATA_DIR=/home/you/var/mongodb/data
+# Bind local Valkey/Redis RDB snapshot (optional):
+#   VALKEY_DATA_DIR=./docker/valkey-data
+#   npm run docker:sync-data   # copies /var/lib/valkey/dump.rdb (Artix default)
+
+name: tg-send-mult
+
+# One image for api / worker / scheduler (single build).
+x-app-image: &app-image
+  image: tg-send-mult:local
+  build: .
+
+x-app-env: &app-env
+  env_file:
+    - .env
+  environment:
+    NODE_ENV: development
+    MONGO_URI: mongodb://mongo:27017/tg_send_mult
+    REDIS_HOST: valkey
+    REDIS_PORT: "6379"
+    API_HOST: 0.0.0.0
+    API_PORT: "3000"
+    TG_PYTHON: /app/python/.venv/bin/python3
+  depends_on:
+    mongo:
+      condition: service_healthy
+    valkey:
+      condition: service_healthy
+
+services:
+  mongo:
+    # Must match host mongod when using MONGO_DATA_DIR bind-mount (e.g. 8.2 from mongodb-bin).
+    image: mongo:8.2
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:27018:27017"
+    volumes:
+      - ${MONGO_DATA_DIR:-mongo_data}:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  valkey:
+    image: valkey/valkey:9-alpine
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6380:6379"
+    command: ["valkey-server", "--save", "60", "1", "--dir", "/data"]
+    volumes:
+      - ${VALKEY_DATA_DIR:-${REDIS_DATA_DIR:-valkey_data}}:/data
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  api:
+    <<: [*app-env, *app-image]
+    restart: unless-stopped
+    command: ["node", "dist/apps/api/index.js"]
+    ports:
+      - "127.0.0.1:3048:3000"
+
+  worker:
+    <<: [*app-env, *app-image]
+    restart: unless-stopped
+    command: ["node", "dist/apps/worker/index.js"]
+
+  scheduler:
+    <<: [*app-env, *app-image]
+    restart: unless-stopped
+    command: ["node", "dist/apps/scheduler/index.js"]
+
+volumes:
+  mongo_data:
+  valkey_data:

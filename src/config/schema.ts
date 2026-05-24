@@ -91,6 +91,29 @@ export const envSchema = z
      * re-tripping the same wait by a few milliseconds.
      */
     FLOOD_WAIT_BUFFER_SEC: z.coerce.number().int().nonnegative().default(5),
+
+    /** Max auto dialog sessions processed per scheduler tick. */
+    DIALOG_BATCH_LIMIT: z.coerce.number().int().positive().default(200),
+    /** Parallel dialog sessions per batch tick. */
+    DIALOG_BATCH_CONCURRENCY: z.coerce.number().int().positive().default(25),
+    /** Lock duration (seconds) while a session turn is executing. */
+    DIALOG_PROCESSING_LOCK_SEC: z.coerce.number().int().positive().default(90),
+
+    /** Inbound: max age of messages to fetch on first sync (seconds). */
+    INBOUND_SYNC_LOOKBACK_SEC: z.coerce.number().int().positive().default(86_400),
+    /** Inbound: min interval between automatic syncs per sender account (seconds). */
+    INBOUND_SYNC_INTERVAL_SEC: z.coerce.number().int().positive().default(90),
+    /** Inbound: delay between accounts in one scheduler tick (milliseconds). */
+    INBOUND_SYNC_STAGGER_MS: z.coerce.number().int().nonnegative().default(2_000),
+    /** Inbound: how many accounts to sync per scheduler minute tick. */
+    INBOUND_SYNC_BATCH_PER_TICK: z.coerce.number().int().positive().default(8),
+
+    /** Dialog: min interval between peer inbox polls per session (seconds). */
+    DIALOG_PEER_SYNC_INTERVAL_SEC: z.coerce.number().int().positive().default(15),
+    /** Dialog: how long to wait before re-polling when waiting_peer (milliseconds). */
+    DIALOG_WAIT_POLL_MS: z.coerce.number().int().positive().default(8_000),
+    /** Dialog: delay between sessions in one batch tick (milliseconds). */
+    DIALOG_SESSION_STAGGER_MS: z.coerce.number().int().nonnegative().default(400),
   })
   .superRefine((cfg, ctx) => {
     if (cfg.NODE_ENV === 'production') {

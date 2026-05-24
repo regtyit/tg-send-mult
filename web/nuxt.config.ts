@@ -8,6 +8,7 @@ const nitroOutDir = resolve(rootDir, '../src/apps/api/public/.nuxt-spa');
 export default defineNuxtConfig({
   ssr: false,
   compatibilityDate: '2024-11-01',
+  css: ['~/assets/data-tables.css'],
   typescript: { strict: true },
   modules: ['vuetify-nuxt-module'],
   vuetify: {

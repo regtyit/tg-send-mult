@@ -1,127 +1,177 @@
 # tg-send-mult
 
-Multi-account Telegram bulk-sender service (MTProto via Telethon) with a Node.js
-backend, a Vuetify dashboard, and BullMQ-based queues. Supports per-account
-proxies, anti-spam pacing, sticky receiver–sender binding, dialog-aware inbox
-sync, and end-to-end campaign verification.
+**Multi-account Telegram outreach platform** — manage sender sessions, audience lists, message templates, and campaigns from a web dashboard or CLI. Built for teams that need controlled, observable bulk messaging over MTProto (user accounts), not bots.
 
-> Local-only by default. The repo does not ship Docker/Compose. You bring your
-> own MongoDB and Redis (local or hosted).
+> **Local-first.** You run MongoDB, Redis, and this app on your own machine or servers. There is no hosted SaaS. Optional **Docker Compose** stack: [docs/DOCKER.md](docs/DOCKER.md) (dashboard on **http://127.0.0.1:3048**).
 
 ---
 
-## Stack
+## What it does
 
-- **Node.js 20 + TypeScript 5** — server / worker / scheduler / CLI
-- **MTProto via Telethon** — `python/tg_worker/run.py`, called from Node over
-  stdio JSON. Supports MTProxy (`dd...` and FakeTLS `ee...` via TelethonFakeTLS),
-  SOCKS5, and direct connection.
-- **MongoDB 7 + Mongoose** — accounts, contacts, campaigns, messages, proxies,
-  delivery events, inbound replies.
-- **Redis 7 + BullMQ** — per-account send queues + Bull Board UI.
-- **Fastify v5** — API (Basic Auth) + static dashboard.
-- **Nuxt 3 + Vuetify 3** — SPA dashboard, served from `src/apps/api/public`.
-- **Vitest** — 140+ unit tests, no live Telegram required.
+| Capability | Summary |
+|------------|---------|
+| **Multi-account sending** | Many Telegram user sessions send in parallel, each with its own BullMQ queue and rate limits. |
+| **Campaign engine** | Pick senders, audience (tags or explicit contacts), and a template; start/pause/resume from the dashboard or CLI. |
+| **Sticky sender binding** | Once a contact receives mail from sender A, later campaigns reuse A for that contact (when A is in the pool). |
+| **Cross-campaign dedup** | The same text is never sent twice to the same recipient, even across different campaigns. |
+| **Per-account proxies** | MTProxy (incl. FakeTLS), SOCKS5, or direct; one proxy per sender, with optional auto-assign by phone country. |
+| **Anti-limit pacing** | Daily caps, hourly rates, sending windows, lognormal jitter, warm-up status, health scores, flood-wait backoff. |
+| **Delivery verification** | Mark accounts as `test_recipient`, sync their inbox, and confirm campaign messages actually arrived. |
+| **Web dashboard** | Senders, proxies, contacts, templates, campaigns — plus BullMQ queue monitor. |
+| **CLI + REST API** | Same operations available headless for automation. |
 
----
+## What it is not
 
-## Setup by OS
+- **Not a Telegram Bot API product.** It uses **user accounts** (MTProto via Telethon). You need real phone numbers and sessions.
+- **Not a guarantee against bans.** Telegram limits bulk outreach aggressively. This tool throttles and handles errors — it does not bypass Telegram policy.
+- **Not plug-and-play.** You install Node 20, Python 3, MongoDB 7, and Redis 7 yourself.
 
-Pick the guide that matches your machine, finish it, then jump to the
-[End-to-end test workflow](#end-to-end-test-workflow) below.
-
-- Ubuntu / Debian: [docs/SETUP_UBUNTU.md](docs/SETUP_UBUNTU.md)
-- Windows 10 / 11 (PowerShell): [docs/SETUP_WINDOWS.md](docs/SETUP_WINDOWS.md)
-- Artix Linux (OpenRC): [docs/SETUP_ARTIX.md](docs/SETUP_ARTIX.md)
-
-All three guides follow the same shape:
-1. Install Node 20+, Python 3, MongoDB, Redis.
-2. Create `python/.venv` and install Telethon (`npm run setup:python`).
-3. Fill `.env` (`SESSION_KEY`, MongoDB / Redis URIs, dashboard credentials).
-4. Build (`npm run build:all`) and run the three dev processes.
+For behavioral guidance and limit context, see [docs/TELEGRAM_SPAM_AND_LIMITS.md](docs/TELEGRAM_SPAM_AND_LIMITS.md).
 
 ---
 
-## Concepts
+## How it fits together
 
-### Account roles
-Every Telegram account in the DB has a `role`:
-
-- **`sender`** (default) — used for delivering campaigns. Eligible for the
-  campaign sender pool.
-- **`test_recipient`** — never sends. Used for verifying that messages actually
-  arrived: its inbox is force-synced and matched against campaign sends.
-
-Set/change the role in the dashboard (Senders page) or via CLI:
-
-```bash
-npm run cli -- accounts set-role <accountId> test_recipient
+```mermaid
+flowchart LR
+  subgraph ui [Dashboard / CLI]
+    Web[Nuxt SPA]
+    CLI[Commander CLI]
+  end
+  subgraph node [Node.js]
+    API[Fastify API]
+    Worker[BullMQ workers]
+    Sched[Scheduler]
+  end
+  subgraph data [Data stores]
+    Mongo[(MongoDB)]
+    Redis[(Redis)]
+  end
+  subgraph tg [Telegram]
+    Py[Telethon bridge]
+    TG[MTProto]
+  end
+  Web --> API
+  CLI --> Mongo
+  API --> Mongo
+  Worker --> Redis
+  Worker --> Py
+  Sched --> Mongo
+  Sched --> Py
+  Py --> TG
+  Mongo --> Worker
 ```
 
-### Sticky receiver–sender binding
-A receiver is bound to a sender on first delivery. Future campaigns reuse the
-same sender for that contact, so a receiver never sees messages from two
-different sender accounts. Implemented in
-`src/modules/multi/stickyAssignment.ts`.
+**Three processes must run** for campaigns to deliver:
 
-### Cross-campaign deduplication
-Identical text + recipient is never sent twice — even across campaigns. The
-project plan’s rule "хеширование текста + userId" is enforced in
-`campaignEnqueue.ts`.
-
-### Dialog-aware inbox sync
-A scheduler tick periodically pulls each sender's recent dialogs (incoming and
-outgoing messages) into MongoDB (`inbound_replies` collection). Force-sync from
-CLI or web also marks dialogs as read in Telegram so the receiver sees blue
-checks (imitates a normal user reading conversations).
-
-### MTProxy with FakeTLS
-The bridge picks the correct Telethon transport per secret type:
-
-| Secret prefix | Transport                                       |
-|---------------|-------------------------------------------------|
-| `dd...`       | `ConnectionTcpMTProxyRandomizedIntermediate`    |
-| `ee...`       | `TelethonFakeTLS.ConnectionTcpMTProxyFakeTLS` (requires `pip install TelethonFakeTLS` in `python/.venv`) |
-| `32 hex`      | `ConnectionTcpMTProxyAbridged`                  |
+1. **API** (`dev:api` / `start:api`) — dashboard, REST, Bull Board.
+2. **Worker** (`dev:worker` / `start:worker`) — consumes send jobs per account.
+3. **Scheduler** (`dev:scheduler` / `start:scheduler`) — daily counter reset, warm-up, inbox sync.
 
 ---
 
-## End-to-end test workflow
+## Quick start
 
-Goal: prove that messages actually reach receivers.
+1. **Install dependencies** — follow the setup guide for your OS:
+   - [Ubuntu / Debian](docs/SETUP_UBUNTU.md)
+   - [Windows 10 / 11](docs/SETUP_WINDOWS.md)
+   - [Artix Linux (OpenRC)](docs/SETUP_ARTIX.md)
 
-1. **Login senders.** Use `auth login`, `auth import-session`, or
-   `auth import-tdata` to add real Telegram accounts that will send.
-2. **Login test recipients.** Same import flow, but mark each account as
-   `test_recipient`:
+2. **Configure and verify:**
    ```bash
-   npm run cli -- accounts set-role <accountId> test_recipient
+   cp .env.example .env
+   # Set SESSION_KEY (64-char hex), MongoDB/Redis URIs, dashboard password
+   npm run setup          # validates .env, Mongo, Redis, Telethon
+   npm run build:all
    ```
-   Or use the role dropdown on the Senders page in the dashboard.
-3. **Add the same phones as contacts.** Import a CSV with the test recipient
-   phones (E.164) so they appear in `contacts`. Tag them e.g. `qa`.
-4. **Create a campaign with that audience.**
-   ```bash
-   npm run cli -- templates create --name welcome --body "hi {firstName}, {Joe,Moe} here"
-   npm run cli -- campaign create --name qa-run --template <templateId> \
-     --accounts <senderId1>,<senderId2> --tags qa
-   npm run cli -- campaign start <campaignId>
-   ```
-5. **Run dev processes** so the campaign is dispatched:
+
+3. **Start the stack** (three terminals):
    ```bash
    npm run dev:api
    npm run dev:worker
    npm run dev:scheduler
    ```
-6. **Verify delivery** when the campaign finishes (CLI):
+
+4. **Open the dashboard:** [http://localhost:3000](http://localhost:3000) (Basic Auth from `.env`).
+
+   **Or Docker Compose** (API + worker + scheduler + Mongo + Valkey): see [docs/DOCKER.md](docs/DOCKER.md) → `npm run docker:up` → [http://127.0.0.1:3048](http://127.0.0.1:3048).
+
+5. **Add a sender** (CLI example — MTProxy required for Telegram actions):
+   ```bash
+   npm run cli -- auth login --proxy-id <proxyId>
+   npm run cli -- send-test --account <id> --to me --text "hello"
+   ```
+
+6. **Read the user guide** for the full workflow: [docs/USER_GUIDE.md](docs/USER_GUIDE.md).
+
+---
+
+## Documentation
+
+| Document | Audience |
+|----------|----------|
+| **[User guide](docs/USER_GUIDE.md)** | Operators — dashboard, campaigns, verification, troubleshooting |
+| [Setup: Ubuntu / Debian](docs/SETUP_UBUNTU.md) | First install on Linux |
+| [Setup: Windows](docs/SETUP_WINDOWS.md) | First install on Windows |
+| [Setup: Artix Linux](docs/SETUP_ARTIX.md) | First install on Artix (OpenRC) |
+| [Telegram limits & safety](docs/TELEGRAM_SPAM_AND_LIMITS.md) | Why throttling exists; error semantics |
+
+---
+
+## Stack
+
+- **Node.js 20 + TypeScript 5** — API, worker, scheduler, CLI
+- **Telethon (Python)** — MTProto bridge at `python/tg_worker/run.py` (stdio JSON from Node)
+- **MongoDB 7 + Mongoose** — accounts, contacts, campaigns, messages, proxies, delivery events
+- **Redis 7 + BullMQ** — per-account send queues + [Bull Board](http://localhost:3000/admin/queues)
+- **Fastify v5** — REST API (Basic Auth) + static SPA
+- **Nuxt 3 + Vuetify 3** — dashboard SPA (built into `src/apps/api/public`)
+- **Vitest** — 170 unit tests; no live Telegram connection required
+
+---
+
+## Key concepts (short)
+
+### Senders vs recipients
+
+- **Sending accounts** — Telegram sessions that *deliver* messages (Senders page / CLI `auth login`).
+- **Contacts (recipients)** — People you message: phones or @usernames imported via CSV (Contacts page). Campaigns never type @handles on the Senders page.
+
+### Account roles
+
+| Role | Behavior |
+|------|----------|
+| `sender` (default) | Included in campaign sender pools; can dispatch messages. |
+| `test_recipient` | Never sends; inbox is synced to verify that campaigns arrived. |
+
+### Account statuses
+
+`new` → `warming` → `active` (normal path). Also: `paused`, `quarantined`, `banned`. Only `active` and `warming` senders with a saved session, healthy score (≥ 0.5), and no active flood-wait/quarantine are eligible for campaigns.
+
+### Sticky sender + even distribution
+
+On first delivery, a contact is linked to one sender. Later campaigns reuse that sender when they are in the pool. New contacts are spread evenly across eligible senders in the pool.
+
+### Templates
+
+Placeholders: `{firstName}`, `{lastName}`, `{name}`, `{phone}`, `{username}`, plus any `contact.extras` field. Spintax: `{A|B|C}` or `{Joe,Moe}`. Optional homoglyph mixing (Latin/Cyrillic lookalikes) per campaign.
+
+---
+
+## End-to-end verification workflow
+
+Prove that messages reach real inboxes:
+
+1. Log in **senders** and **test recipients** (same `auth` flows; set role on test accounts).
+2. Import test recipient phones as **contacts** (tag them, e.g. `qa`).
+3. Create a **template** and **campaign** targeting that tag; **start** it with all three processes running.
+4. Run **verify** when finished:
    ```bash
    npm run cli -- campaign verify <campaignId>
    ```
-   Or web: open Campaigns → Verify on the campaign row. Verify forces an inbox
-   sync on every test_recipient and prints how many messages from this campaign
-   were observed in their dialogs.
+   Or use **Verify** on the campaign row in the dashboard.
 
-The output looks like:
+Expected output shape:
 ```json
 {
   "campaignId": "...",
@@ -133,137 +183,89 @@ The output looks like:
 }
 ```
 
+Details: [User guide — Verify deliveries](docs/USER_GUIDE.md#verify-deliveries).
+
 ---
 
-## CLI
+## CLI (summary)
 
 ```text
 tg auth login [-p +phone] [--proxy-id <id>] [--api-id <n>] [--api-hash <h>]
-tg auth import-session -p +... -s <fileOrString> [--proxy-id <id>]
-tg auth import-tdata -p +... --tdata <path> [--json <path>] [--proxy-id <id>]
-tg auth import-json --json <path> [-p +...] [--proxy-id <id>]
-tg auth import-mtp -p +... --dc <1-5> --auth-key-hex <512 hex>
-tg proxies add-mtproto --host <ip|domain> --port <n> [--secret <hex>] [--country <ISO2>]
-tg proxies list
-tg accounts list | pause <id> | resume <id>
-tg accounts set-role <id> <sender|test_recipient>
-tg accounts verify-login [--accounts "<refs>"]
-tg accounts sync-inbox [--accounts "<refs>"]   # force inbox read + mark-read
+tg auth import-session | import-tdata | import-json | import-mtp
+tg proxies add-mtproto | list
+tg accounts list | pause | resume | set-role | verify-login | sync-inbox
 tg send-test --account <ref> --to <peer> --text "..."
 tg contacts import <file.csv|json>
 tg templates create --name <n> --body "..."
-tg campaign create --name <n> --template <id> --accounts <ids> [--tags ...] [--homoglyphs]
-tg campaign start <id> | pause <id> | resume <id> | stats <id>
-tg campaign verify <id>                        # E2E delivery check
+tg campaign create | start | pause | resume | stats | verify
 ```
 
-Templates support placeholders and choice spintax:
-- `{firstName}`, `{lastName}`, `{name}`, `{phone}`, `{username}`, plus any
-  field from `contact.extras`.
-- `{A|B|C}` and `{Joe,Moe}` randomly pick one option per render.
+Full reference: [User guide — CLI reference](docs/USER_GUIDE.md#cli-reference).
 
 ---
 
-## REST API
+## REST API (summary)
 
-Mount: `/api`, Basic Auth from `.env`.
+- Mount: `/api` (Basic Auth, same credentials as dashboard)
+- Health: `GET /health` (no auth)
+- Metrics: `GET /metrics` (Prometheus-style counters)
+- Bull Board: `/admin/queues`
 
-Highlights:
+Notable routes: accounts (CRUD, session import, send-test, inbox sync, MTProxy assign), proxies, contacts import/list, templates, campaigns (start/pause/resume/verify/results), messages, inbound-replies.
 
-- `GET /api/accounts`, `POST /api/accounts`, `PATCH /api/accounts/:id`
-  — supports `role: "sender" | "test_recipient"`.
-- `POST /api/accounts/:id/send-test` — quick deliverability check from a sender.
-- `POST /api/accounts/:id/inbound-replies/sync` — force inbox read + mark-read
-  for one account.
-- `POST /api/accounts/:id/assign-mtproxy` / `POST /api/accounts/assign-mtproxy-auto`.
-- `GET /api/inbound-replies?accountId=...&limit=...` — read what was captured.
-- `POST /api/campaigns`, `GET /api/campaigns`.
-- `POST /api/campaigns/:id/start` | `pause` | `resume`.
-- `POST /api/campaigns/:id/verify` — runs the same flow as the CLI verify.
-- `GET /api/messages` — paginated (with `paginated=true&skip=&limit=`).
-- `GET /metrics` — Prometheus-style counters.
-
-BullMQ board: `/admin/queues`.
-
----
-
-## Architecture
-
-```
-src/
-  apps/
-    api/         Fastify HTTP API + static SPA mount + Bull Board
-    worker/      BullMQ workers per account (refreshed dynamically)
-    scheduler/   cron: daily counter reset, warm-up, inbound replies tick
-    cli/         commander.js CLI (auth, proxies, accounts, campaigns, ...)
-  modules/
-    auth/        login + session imports (gramJS, Telethon, tdata, JSON, MTProto)
-    messaging/   campaignEnqueue, campaignLifecycle, send, syncInboundReplies, verifyCampaign
-    multi/       dispatcher (load-aware), stickyAssignment (receiver→sender)
-    proxy/       MTProxy policy + country matching
-    antilimit/   jitter + sending window guards
-    template/    spintax + homoglyph mixer
-    contacts/    CSV/JSON import + audience resolver
-    dedup/       text hashing
-  telegram/     Telethon bridge wrapper, MTProxy normalization, error mapping
-  queue/        BullMQ queues + send job processor (FLOOD_WAIT, retries, etc.)
-  db/models/    Mongoose schemas
-  config/       Zod-validated environment
-  util/         shutdown, CLI validators, mongo error helpers
-python/
-  tg_worker/run.py     Telethon bridge (do not change for the test workflow)
-  requirements.txt
-web/
-  pages/        Vuetify SPA (Senders, Proxies, Contacts, Templates, Campaigns)
-  composables/  useApi, useToast, useConfirm, usePolling
-tests/         Vitest suites (no live Telegram)
-docs/          Setup guides + Telegram limits notes
-```
-
----
-
-## Risks and limits
-
-- Telegram aggressively detects bulk sending. Use:
-  - separate per-account proxies (preferably MTProxy in the receiver country),
-  - warm-up (`status: warming` is auto-promoted by the scheduler),
-  - jittered delays + per-account sending windows,
-  - per-account daily caps,
-  - homoglyph mixer (Latin/Cyrillic lookalikes) and template spintax to avoid
-    identical text.
-- `FLOOD_WAIT_X`, `PEER_FLOOD`, `AUTH_KEY_UNREGISTERED`, `PHONE_NUMBER_BANNED`
-  are all classified into a domain error type and handled accordingly
-  (delay / quarantine / ban). See `src/telegram/errors.ts` and
-  `tests/telegram/bridgeErrorToDomain.test.ts`.
-- Sessions are encrypted with AES-256-GCM under `SESSION_KEY` (32 bytes hex).
-
-See [docs/TELEGRAM_SPAM_AND_LIMITS.md](docs/TELEGRAM_SPAM_AND_LIMITS.md) for
-behavioral guidance.
+Full list: [User guide — REST API](docs/USER_GUIDE.md#rest-api).
 
 ---
 
 ## Development
 
 ```bash
-npm install
-cd web && npm install && cd ..
+npm install && cd web && npm install && cd ..
 npm run setup:python
 cp .env.example .env
-# edit .env (SESSION_KEY at minimum)
-
-npm run setup        # validate env + Mongo + Redis
+npm run setup
 npm run build:all
 npm test
 npm run lint
 npm run typecheck
 ```
 
-Three terminals to run the service:
+**Production notes:** set `NODE_ENV=production`, change `API_BASIC_USER` / `API_BASIC_PASSWORD` (≥ 12 chars), and configure `CORS_ALLOWED_ORIGINS` if the dashboard is on another origin. The app refuses to start in production with default credentials.
 
+**Database migrations** (run once when upgrading):
 ```bash
-npm run dev:api
-npm run dev:worker
-npm run dev:scheduler
+npm run migrate:message-dedup
+npm run migrate:contact-phone-index
+npm run migrate:campaign-contact-dedup
 ```
 
-Dashboard: <http://localhost:3000>. BullMQ UI: <http://localhost:3000/admin/queues>.
+---
+
+## Project layout
+
+```
+src/apps/       api, worker, scheduler, cli
+src/modules/    auth, messaging, multi, proxy, antilimit, template, contacts, dedup
+src/telegram/   Telethon bridge, errors, session crypto
+src/queue/      BullMQ queues + send processor
+src/db/models/  Mongoose schemas
+python/         Telethon worker (run.py)
+web/            Nuxt dashboard source
+docs/           Setup guides, user guide, limits notes
+tests/          Vitest (no live Telegram)
+```
+
+---
+
+## Risks and compliance
+
+Telegram user-account bulk messaging can trigger `FLOOD_WAIT`, `PEER_FLOOD`, session bans, and account freezes. This project:
+
+- Throttles per account (queues, caps, windows, jitter)
+- Deduplicates recipient + text
+- Maps errors to backoff, quarantine, or skip
+- Isolates accounts (one flood wait does not block others)
+
+**You** are responsible for consent, opt-out, applicable law, and [Telegram's Terms of Service](https://telegram.org/tos). Use test recipients and low volume before scaling.
+
+See [docs/TELEGRAM_SPAM_AND_LIMITS.md](docs/TELEGRAM_SPAM_AND_LIMITS.md).

@@ -67,7 +67,7 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  process.stdout.write('  Redis: PING… ');
+  process.stdout.write('  Valkey/Redis: PING… ');
   const redis = new IORedis({
     host: cfg.REDIS_HOST,
     port: cfg.REDIS_PORT,

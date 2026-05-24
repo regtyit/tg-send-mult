@@ -29,14 +29,22 @@ function normalizeUsername(v: string): string {
   return u.toLowerCase();
 }
 
+export interface ContactImportLineError {
+  line: number;
+  reason: string;
+}
+
 export async function importContactsFromRows(
   rows: ImportRow[],
   opts: { defaultCountry?: string; tags?: string[]; source?: string } = {},
-): Promise<{ upserted: number; invalid: number }> {
+): Promise<{ upserted: number; invalid: number; errors: ContactImportLineError[] }> {
   let upserted = 0;
   let invalid = 0;
+  const errors: ContactImportLineError[] = [];
 
-  for (const row of rows) {
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i]!;
+    const line = i + 2;
     const raw =
       (typeof row.phone === 'string' && row.phone) ||
       (typeof row.Phone === 'string' && row.Phone) ||
@@ -50,6 +58,7 @@ export async function importContactsFromRows(
     const e164 = username ? null : toE164(raw, opts.defaultCountry);
     if (!e164 && !username) {
       invalid++;
+      errors.push({ line, reason: 'missing phone or username' });
       continue;
     }
 
@@ -93,25 +102,28 @@ export async function importContactsFromRows(
     const mergedExtras = { ...(existing?.extras ?? {}), ...extras };
     const mergedTags = [...new Set([...(existing?.tags ?? []), ...allTags])];
 
+    const phone = e164 || existing?.phoneE164 || '';
     const setDoc = {
       // Preserve known names/usernames when import rows are partial.
-      phoneE164: e164 || existing?.phoneE164 || '',
       firstName: firstName || existing?.firstName || '',
       lastName: lastName || existing?.lastName || '',
       username: username || existing?.username || '',
       tags: mergedTags,
       importedFrom: opts.source ?? 'import',
       extras: mergedExtras,
+      ...(phone ? { phoneE164: phone } : {}),
     };
     if (existing?._id) {
-      await ContactModel.findByIdAndUpdate(existing._id, { $set: setDoc });
+      const update: { $set: typeof setDoc; $unset?: { phoneE164: 1 } } = { $set: setDoc };
+      if (!phone) update.$unset = { phoneE164: 1 };
+      await ContactModel.findByIdAndUpdate(existing._id, update);
     } else {
       await ContactModel.create(setDoc);
     }
     upserted++;
   }
 
-  return { upserted, invalid };
+  return { upserted, invalid, errors };
 }
 
 export function parseCsvBuffer(buf: Buffer | string): ImportRow[] {

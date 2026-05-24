@@ -34,8 +34,9 @@ from telethon.network.connection.tcpmtproxy import (
     ConnectionTcpMTProxyRandomizedIntermediate,
 )
 from telethon.sessions import StringSession
+from telethon.tl.functions.messages import SetTypingRequest
 from telethon.tl.functions.updates import GetStateRequest
-from telethon.tl.types import User
+from telethon.tl.types import SendMessageTypingAction, User
 
 
 def _normalize_mtproxy_secret(raw: str) -> str:
@@ -354,6 +355,50 @@ async def handle_get_state(req: dict[str, Any]) -> dict[str, Any]:
         await client.disconnect()
 
 
+def _normalize_username(raw: str) -> str:
+    return str(raw or "").strip().lstrip("@").lower()
+
+
+def _peer_matches_filter(entity: Any, req: dict[str, Any]) -> bool:
+    """When peer* filters are set, only scan that dialog."""
+    want_uid = str(req.get("peerUserId") or "").strip()
+    want_user = _normalize_username(str(req.get("peerUsername") or ""))
+    want_phone = re.sub(r"[^\d+]", "", str(req.get("peerPhone") or ""))
+    if not want_uid and not want_user and not want_phone:
+        return True
+    if not isinstance(entity, User):
+        return False
+    if want_uid and str(getattr(entity, "id", "") or "") == want_uid:
+        return True
+    if want_user and _normalize_username(str(getattr(entity, "username", "") or "")) == want_user:
+        return True
+    ent_phone = re.sub(r"[^\d+]", "", str(getattr(entity, "phone", "") or ""))
+    if want_phone and ent_phone and ent_phone == want_phone:
+        return True
+    return False
+
+
+async def handle_set_typing(req: dict[str, Any]) -> dict[str, Any]:
+    session = str(req.get("session") or "")
+    peer = str(req.get("peer") or "").strip()
+    seconds = _bridge_int(req, "seconds", 3, min_v=1, max_v=30)
+    if not peer:
+        return _fail("PEER_EMPTY", "Empty peer")
+    client = _make_client(req, session)
+    try:
+        await client.connect()
+        if not await client.is_user_authorized():
+            return _fail("AUTH_KEY_UNREGISTERED", "Session not authorized")
+        entity = await client.get_entity(peer)
+        await client(SetTypingRequest(entity, SendMessageTypingAction()))
+        await asyncio.sleep(seconds)
+        return _ok({})
+    except Exception as exc:
+        return _rpc_to_err(exc, req)
+    finally:
+        await client.disconnect()
+
+
 async def handle_send_message(req: dict[str, Any]) -> dict[str, Any]:
     session = str(req.get("session") or "")
     peer = str(req.get("peer") or "").strip()
@@ -383,9 +428,15 @@ async def handle_list_incoming(req: dict[str, Any]) -> dict[str, Any]:
     since_epoch_sec = _bridge_int(req, "sinceEpochSec", 0, min_v=0)
     include_outgoing = bool(req.get("includeOutgoing"))
     mark_read = bool(req.get("markRead"))
+    peer_filter_active = bool(
+        str(req.get("peerUserId") or "").strip()
+        or _normalize_username(str(req.get("peerUsername") or ""))
+        or re.sub(r"[^\d+]", "", str(req.get("peerPhone") or ""))
+    )
     out: list[dict[str, Any]] = []
     dialogs_scanned = 0
     dialogs_marked_read = 0
+    peers_marked_read: list[str] = []
 
     try:
         await client.connect()
@@ -396,33 +447,35 @@ async def handle_list_incoming(req: dict[str, Any]) -> dict[str, Any]:
             entity = dialog.entity
             if isinstance(entity, User) and getattr(entity, "bot", False):
                 continue
+            if not _peer_matches_filter(entity, req):
+                continue
 
             dialogs_scanned += 1
-            max_incoming_id = 0
+            peer_user_id = str(getattr(entity, "id", "") or "") if isinstance(entity, User) else ""
+            unread_count = int(getattr(dialog, "unread_count", 0) or 0)
 
             async for msg in client.iter_messages(entity, limit=per_dialog_limit):
                 incoming = bool(getattr(msg, "incoming", False))
                 msg_id = int(getattr(msg, "id", 0) or 0)
-                if incoming and msg_id > max_incoming_id:
-                    max_incoming_id = msg_id
                 if not incoming and not include_outgoing:
                     continue
                 text = str(getattr(msg, "message", "") or "").strip()
-                if not text:
-                    continue
                 dt = getattr(msg, "date", None)
                 ts = int(dt.timestamp()) if dt else 0
                 if since_epoch_sec > 0 and ts < since_epoch_sec:
                     continue
+                # When marking read, still list recent incoming without text (media-only replies).
+                if not text and not (mark_read and incoming):
+                    continue
 
                 sender_user_id = str(getattr(msg, "sender_id", "") or "")
-                peer_user_id = str(getattr(entity, "id", "") or "") if isinstance(entity, User) else sender_user_id
+                row_peer_user_id = peer_user_id or sender_user_id
                 out.append(
                     {
                         "messageId": msg_id,
                         "dateEpochSec": ts,
                         "text": text,
-                        "peerUserId": peer_user_id,
+                        "peerUserId": row_peer_user_id,
                         "peerUsername": str(getattr(entity, "username", "") or ""),
                         "peerPhone": str(getattr(entity, "phone", "") or ""),
                         "peerFirstName": str(getattr(entity, "first_name", "") or ""),
@@ -432,12 +485,14 @@ async def handle_list_incoming(req: dict[str, Any]) -> dict[str, Any]:
                     }
                 )
 
-            # Mark all incoming messages of the dialog as read so the receiver
-            # sees blue checks (i.e. their reply was actually read by sender).
-            if mark_read and max_incoming_id > 0:
+            # Mark the whole dialog read so the recipient sees blue checks on their messages.
+            # Use full read ack (no max_id cap) so messages outside per_dialog_limit are included.
+            if mark_read and (unread_count > 0 or peer_filter_active):
                 try:
-                    await client.send_read_acknowledge(entity, max_id=max_incoming_id)
+                    await client.send_read_acknowledge(entity)
                     dialogs_marked_read += 1
+                    if peer_user_id:
+                        peers_marked_read.append(peer_user_id)
                 except Exception:
                     pass
 
@@ -447,6 +502,7 @@ async def handle_list_incoming(req: dict[str, Any]) -> dict[str, Any]:
                 "items": out[:limit],
                 "dialogsScanned": dialogs_scanned,
                 "dialogsMarkedRead": dialogs_marked_read,
+                "peersMarkedRead": peers_marked_read,
             }
         )
     except Exception as exc:
@@ -531,6 +587,7 @@ HANDLERS = {
     "get_me": handle_get_me,
     "get_state": handle_get_state,
     "send_message": handle_send_message,
+    "set_typing": handle_set_typing,
     "list_incoming": handle_list_incoming,
     "auth_send_code": handle_auth_send_code,
     "auth_sign_in": handle_auth_sign_in,

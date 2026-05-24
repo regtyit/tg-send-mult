@@ -40,18 +40,31 @@
       </v-row>
     </v-card>
 
-    <v-card class="mb-6 pa-4">
-      <v-card-title class="text-subtitle-1 px-0 pt-0">Import CSV</v-card-title>
-      <v-textarea v-model="csv" rows="6" variant="outlined" class="mb-2" label="CSV content" />
-      <v-text-field
-        v-model="tags"
-        label="Tags (comma-separated)"
-        variant="outlined"
-        density="comfortable"
-        class="mb-4"
-      />
-      <v-btn color="primary" :loading="importing" :disabled="importing" @click="importCsv">Import</v-btn>
-    </v-card>
+    <BulkImportPanel
+      title="Import recipients (CSV / JSON)"
+      hint="Columns: phone, username, firstName, lastName, tags"
+      button-label="Import"
+      :loading="importing"
+      :result-summary="importSummary"
+      @import="importBulk"
+    >
+      <template #extra-fields>
+        <v-text-field
+          v-model="tags"
+          label="Tags (comma-separated)"
+          variant="outlined"
+          density="comfortable"
+          class="mt-2"
+        />
+        <v-text-field
+          v-model="defaultCountry"
+          label="Default country (ISO2, e.g. RU)"
+          variant="outlined"
+          density="comfortable"
+          class="mt-2"
+        />
+      </template>
+    </BulkImportPanel>
 
     <v-alert
       v-if="loadErr"
@@ -101,18 +114,27 @@
       :items-per-page="pageSize"
       :page="page"
       :loading="polling"
-      class="elevation-1 rounded"
-      density="comfortable"
+      :class="DATA_TABLE_CLASS"
+      density="compact"
       :items-per-page-options="[25, 50, 100, 200]"
       @update:page="(p: number) => { page = p; load(); }"
       @update:items-per-page="(n: number) => { pageSize = n; page = 1; load(); }"
     >
+      <template #[`item.phoneE164`]="{ item }">
+        <span class="cell-overflow" :title="item.phoneE164">{{ item.phoneE164 || '—' }}</span>
+      </template>
+      <template #[`item.firstName`]="{ item }">
+        <span class="cell-overflow" :title="item.firstName">{{ item.firstName || '—' }}</span>
+      </template>
       <template #[`item.tags`]="{ item }">
-        {{ (item.tags ?? []).join(', ') }}
+        <span class="cell-overflow" :title="(item.tags ?? []).join(', ')">{{ (item.tags ?? []).join(', ') || '—' }}</span>
       </template>
       <template #[`item.username`]="{ item }">
-        <span v-if="item.username">@{{ item.username }}</span>
+        <span v-if="item.username" class="cell-overflow">@{{ item.username }}</span>
         <span v-else class="text-medium-emphasis">—</span>
+      </template>
+      <template #[`item.status`]="{ item }">
+        <span class="cell-overflow">{{ item.status || '—' }}</span>
       </template>
       <template #[`item.actions`]="{ item }">
         <v-btn size="small" variant="text" color="error" @click="removeContact(item._id)">delete</v-btn>
@@ -123,6 +145,7 @@
 
 <script setup lang="ts">
 import { errorText } from '~/composables/useToast';
+import { DATA_TABLE_CLASS, fixedCol } from '~/utils/tableColumns';
 
 interface Contact {
   _id: string;
@@ -142,8 +165,9 @@ const page = ref(1);
 const pageSize = ref(50);
 const searchQuery = ref('');
 const searchTag = ref('');
-const csv = ref('phone,firstName\n+79991234567,Test');
 const tags = ref('');
+const defaultCountry = ref('');
+const importSummary = ref('');
 const singlePhoneOrUsername = ref('');
 const singleFirstName = ref('');
 const singleTags = ref('');
@@ -162,12 +186,12 @@ function onSearchChange(): void {
 }
 
 const headers = [
-  { title: 'Phone', key: 'phoneE164' },
-  { title: 'Username', key: 'username' },
-  { title: 'Name', key: 'firstName' },
-  { title: 'Status', key: 'status' },
-  { title: 'Tags', key: 'tags' },
-  { title: 'Actions', key: 'actions', sortable: false },
+  fixedCol('Phone', 'phoneE164', 130),
+  fixedCol('Username', 'username', 110),
+  fixedCol('Name', 'firstName', 100),
+  fixedCol('Status', 'status', 88),
+  fixedCol('Tags', 'tags', 140),
+  fixedCol('', 'actions', 72, { sortable: false }),
 ];
 
 async function load(): Promise<void> {
@@ -194,16 +218,23 @@ async function load(): Promise<void> {
 
 const { running: polling, refresh } = usePolling(load, { intervalMs: 15000 });
 
-async function importCsv(): Promise<void> {
+async function importBulk(payload: { csv?: string; json?: string }): Promise<void> {
   importing.value = true;
+  importSummary.value = '';
   try {
-    const res = await apiFetch<{ upserted: number; invalid: number }>('/api/contacts/import', {
-      method: 'POST',
-      body: JSON.stringify({
-        csv: csv.value,
-        tags: tags.value ? tags.value.split(',').map((t) => t.trim()) : [],
-      }),
-    });
+    const res = await apiFetch<{ upserted: number; invalid: number; errors?: { line: number; reason: string }[] }>(
+      '/api/contacts/import',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          ...payload,
+          tags: tags.value ? tags.value.split(',').map((t) => t.trim()) : [],
+          defaultCountry: defaultCountry.value.trim() || undefined,
+        }),
+      },
+    );
+    const errLines = (res.errors ?? []).slice(0, 5).map((e) => `L${e.line}: ${e.reason}`);
+    importSummary.value = `Upserted ${res.upserted}, invalid ${res.invalid}${errLines.length ? `. ${errLines.join('; ')}` : ''}`;
     if (res.invalid > 0) {
       toast.warning(`Imported: ${res.upserted}, invalid: ${res.invalid}`);
     } else {

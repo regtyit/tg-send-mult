@@ -1,12 +1,14 @@
+import type { AccountDoc } from '../../db/models/Account';
 import { ProxyDoc } from '../../db/models/Proxy';
 import {
   MissingTelegramApiCredentialsError,
   telegramApiCredentialsForAccount,
 } from '../../telegram/apiCredentials';
-import { defaultDeviceProfile } from '../../telegram/deviceProfile';
+import { defaultDeviceProfile, deviceProfileFromAccount } from '../../telegram/deviceProfile';
 import { TgDomainError } from '../../telegram/errors';
 import { proxyDocToTelethonPayload } from '../../telegram/proxyPayload';
 import { runTelethonBridgeAsync, telethonCommon } from '../../telegram/pythonBridge';
+import { decryptSessionStringForAccount } from '../../telegram/sessionString';
 
 export interface ProxyTestResult {
   ok: boolean;
@@ -32,7 +34,7 @@ export interface ProxyTestResult {
  */
 export async function testProxy(
   proxy: ProxyDoc,
-  options: { timeoutMs?: number } = {},
+  options: { timeoutMs?: number; account?: AccountDoc | null } = {},
 ): Promise<ProxyTestResult> {
   const proxyPayload = proxyDocToTelethonPayload(proxy);
   if (proxyPayload.type === 'none') {
@@ -45,9 +47,16 @@ export async function testProxy(
     };
   }
 
+  const account = options.account ?? null;
   let creds: { apiId: number; apiHash: string };
+  let session = '';
+  let device = defaultDeviceProfile();
   try {
-    creds = telegramApiCredentialsForAccount(null);
+    creds = telegramApiCredentialsForAccount(account);
+    if (account?.sessionEnc?.trim()) {
+      session = decryptSessionStringForAccount(account);
+      device = deviceProfileFromAccount(account);
+    }
   } catch (err) {
     if (err instanceof MissingTelegramApiCredentialsError) {
       return {
@@ -67,25 +76,28 @@ export async function testProxy(
     const res = await runTelethonBridgeAsync(
       {
         action: 'get_me',
-        session: '',
-        ...telethonCommon(creds, defaultDeviceProfile(), proxyPayload),
+        session,
+        ...telethonCommon(creds, device, proxyPayload),
       },
       options.timeoutMs ? { timeoutMs: options.timeoutMs } : undefined,
     );
     const durationMs = Date.now() - startedAt;
 
     if (res.ok) {
-      // Should not happen with empty session, but treat as connected.
+      const me = res.result as { username?: string; userId?: string } | undefined;
+      const who = me?.username ? `@${me.username}` : me?.userId ? `user ${me.userId}` : '';
       return {
         ok: true,
         stage: 'connected',
-        message: 'Proxy reachable',
+        message: account
+          ? `Proxy reachable with sender session${who ? ` (${who})` : ''}.`
+          : 'Proxy reachable',
         durationMs,
       };
     }
 
     const code = (res.error?.code ?? '').toUpperCase();
-    if (code === 'AUTH_KEY_UNREGISTERED') {
+    if (!account && code === 'AUTH_KEY_UNREGISTERED') {
       return {
         ok: true,
         stage: 'connected',

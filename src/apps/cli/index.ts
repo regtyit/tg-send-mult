@@ -4,7 +4,13 @@ import fs from 'fs';
 import { Types } from 'mongoose';
 import { config } from '../../config';
 import { connectMongo } from '../../db';
-import { AccountModel, CampaignModel, ProxyModel, TemplateModel } from '../../db/models';
+import { AccountModel, ProxyModel } from '../../db/models';
+import {
+  registerCampaignCommands,
+  registerDialogCommands,
+  registerTemplateCommands,
+} from './dialogCommands';
+import { registerSeedCommands } from './seedCommands';
 import { defaultDeviceProfile, type DeviceProfile } from '../../telegram/client';
 import {
   interactiveLogin,
@@ -21,11 +27,9 @@ import {
   parseJsonBuffer,
   importContactsFromRows,
 } from '../../modules/contacts/importRows';
-import { startCampaign, pauseCampaign, resumeCampaign } from '../../modules/messaging/campaignLifecycle';
 import { logger } from '../../logger';
 import { resolveAccountSpecifiers } from '../../modules/accounts/resolveAccountSpecifiers';
 import { syncInboundRepliesForAccount } from '../../modules/messaging/syncInboundReplies';
-import { verifyCampaignDelivery } from '../../modules/messaging/verifyCampaign';
 import { testProxy } from '../../modules/proxy/test';
 import { ensureContactForTestRecipient } from '../../modules/contacts/testRecipient';
 import { tryParseTelegramProxyLink } from '../../telegram/proxyPayload';
@@ -421,6 +425,27 @@ program
       }),
   )
   .addCommand(
+    new Command('import')
+      .description('Import proxies from CSV or JSON file')
+      .argument('<file>', 'Path to .csv or .json file')
+      .action(async (file: string) => {
+        await connectMongo();
+        const fs = await import('fs');
+        const text = fs.readFileSync(file, 'utf8');
+        const ext = file.toLowerCase();
+        const { importProxiesFromBulk } = await import('../../modules/proxy/importProxies');
+        const payload = ext.endsWith('.json') ? { json: text } : { csv: text };
+        const result = await importProxiesFromBulk(payload);
+        logger.info(
+          { imported: result.imported, failed: result.failed },
+          'proxies: bulk import done',
+        );
+        for (const row of result.results.filter((r) => !r.ok)) {
+          logger.warn({ line: row.line, error: row.error }, 'proxies: import row failed');
+        }
+      }),
+  )
+  .addCommand(
     new Command('list').action(async () => {
       await connectMongo();
       const list = await ProxyModel.find().sort({ createdAt: -1 }).lean();
@@ -486,18 +511,32 @@ program
   .command('accounts')
   .description('Manage accounts')
   .addCommand(
-    new Command('list').action(async () => {
-      await connectMongo();
-      const list = await AccountModel.find().sort({ createdAt: -1 }).lean();
-      console.table(
-        list.map((a) => ({
-          id: a._id.toString(),
-          phone: a.phone,
-          status: a.status,
-          health: a.healthScore?.toFixed?.(2) ?? a.healthScore,
-        })),
-      );
-    }),
+    new Command('list')
+      .description('List accounts')
+      .option('--status <status>', 'Filter by status')
+      .option('--role <role>', 'sender | test_recipient')
+      .option('--limit <n>', 'Max rows', (v) => parseInt(String(v), 10), 500)
+      .action(async (opts) => {
+        await connectMongo();
+        const filter: Record<string, unknown> = {};
+        if (opts.status) filter.status = String(opts.status);
+        if (opts.role) filter.role = String(opts.role);
+        const limit = Number.isFinite(opts.limit) ? opts.limit : 500;
+        const list = await AccountModel.find(filter).sort({ phone: 1 }).limit(limit).lean();
+        const total = await AccountModel.countDocuments(filter);
+        console.table(
+          list.map((a) => ({
+            id: a._id.toString(),
+            phone: a.phone,
+            status: a.status,
+            role: a.role,
+            user: a.telegramUsername ? `@${a.telegramUsername}` : '',
+            session: a.sessionEnc ? 'yes' : 'no',
+            health: a.healthScore?.toFixed?.(2) ?? a.healthScore,
+          })),
+        );
+        console.log(`Showing ${list.length} of ${total} account(s).`);
+      }),
   )
   .addCommand(
     new Command('pause')
@@ -578,11 +617,22 @@ program
           if (!acc) continue;
           const proxy = acc.proxyId ? await ProxyModel.findById(acc.proxyId) : null;
           try {
-            const { saved, scanned, markedRead } = await syncInboundRepliesForAccount(
-              acc,
-              proxy,
-              { markRead: true },
-            );
+            const result = await syncInboundRepliesForAccount(acc, proxy, {
+              markRead: true,
+              force: true,
+            });
+            if ('skipped' in result && result.skipped) {
+              rows.push({
+                id: acc._id.toString(),
+                phone: acc.phone,
+                status: 'skipped',
+                saved: 0,
+                scanned: 0,
+                markedRead: 0,
+              });
+              continue;
+            }
+            const { saved, scanned, markedRead } = result;
             rows.push({
               id: acc._id.toString(),
               phone: acc.phone,
@@ -714,137 +764,10 @@ program
       }),
   );
 
-program
-  .command('templates')
-  .description('Templates')
-  .addCommand(
-    new Command('create')
-      .requiredOption('-n, --name <name>')
-      .requiredOption('-b, --body <body>')
-      .action(async (opts) => {
-        await connectMongo();
-        const t = await TemplateModel.create({ name: opts.name, body: opts.body });
-        logger.info({ id: t._id.toString() }, 'templates: created');
-      }),
-  );
-
-program
-  .command('campaign')
-  .description('Campaigns')
-  .addCommand(
-    new Command('create')
-      .requiredOption('-n, --name <name>')
-      .requiredOption('--template <templateId>')
-      .requiredOption('--accounts <ids>', 'Comma-separated account ids')
-      .option('--tags <tags>', 'Audience tags (comma-separated)')
-      .option('--homoglyphs', 'Random Latin→Cyrillic lookalike letters in rendered text')
-      .option(
-        '--homoglyph-probability <n>',
-        'Per-letter chance 0..1 (default 0.35)',
-        (v) => parseFloat(String(v)),
-        0.35,
-      )
-      .action(async (opts) => {
-        await connectMongo();
-        const accountPool = String(opts.accounts)
-          .split(',')
-          .map((s: string) => s.trim())
-          .filter(Boolean)
-          .map((id: string) => new Types.ObjectId(id));
-        const tags = opts.tags
-          ? String(opts.tags)
-              .split(',')
-              .map((t: string) => t.trim())
-              .filter(Boolean)
-          : [];
-        const homoglyphs =
-          opts.homoglyphs === true
-            ? {
-                enabled: true,
-                probability: Math.min(1, Math.max(0, Number(opts.homoglyphProbability) || 0.35)),
-              }
-            : undefined;
-        const c = await CampaignModel.create({
-          name: opts.name,
-          templateId: new Types.ObjectId(opts.template),
-          accountPool,
-          audience: { tags, contactIds: [] },
-          homoglyphs,
-          status: 'draft',
-        });
-        logger.info({ id: c._id.toString() }, 'campaign: created');
-      }),
-  )
-  .addCommand(
-    new Command('start')
-      .argument('<id>')
-      .action(async (id) => {
-        await connectMongo();
-        await startCampaign(id);
-        logger.info({ id }, 'campaign: started');
-      }),
-  )
-  .addCommand(
-    new Command('pause')
-      .argument('<id>')
-      .action(async (id) => {
-        await connectMongo();
-        await pauseCampaign(id);
-      }),
-  )
-  .addCommand(
-    new Command('resume')
-      .argument('<id>')
-      .action(async (id) => {
-        await connectMongo();
-        await resumeCampaign(id);
-      }),
-  )
-  .addCommand(
-    new Command('verify')
-      .description(
-        'Force-sync test_recipient inboxes and verify which campaign messages actually arrived',
-      )
-      .argument('<id>')
-      .action(async (id) => {
-        await connectMongo();
-        const r = await verifyCampaignDelivery(id);
-        console.log(
-          JSON.stringify(
-            {
-              campaignId: r.campaignId,
-              totalSent: r.totalSent,
-              testRecipients: r.testRecipients,
-              observable: r.observable,
-              verified: r.verified,
-              missing: r.missing,
-            },
-            null,
-            2,
-          ),
-        );
-        if (r.details.length) {
-          console.table(
-            r.details.map((d) => ({
-              messageId: d.messageId,
-              phone: d.contactPhone,
-              status: d.status,
-              testAccount: d.testAccountId ?? '',
-              reason: d.reason ?? '',
-            })),
-          );
-        }
-      }),
-  )
-  .addCommand(
-    new Command('stats')
-      .argument('<id>')
-      .action(async (id) => {
-        await connectMongo();
-        const c = await CampaignModel.findById(id).lean();
-        console.log(JSON.stringify(c?.stats, null, 2));
-      }),
-  );
+registerDialogCommands(program);
+registerTemplateCommands(program);
+registerCampaignCommands(program);
+registerSeedCommands(program);
 
 program.parseAsync(process.argv).catch((err) => {
   logger.error({ err }, 'cli: error');

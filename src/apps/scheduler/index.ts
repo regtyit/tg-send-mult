@@ -14,7 +14,8 @@ import { recomputeHealthScore } from '../../modules/multi/health';
 import { assertMtProxyPolicy } from '../../modules/proxy/policy';
 import { TgDomainError } from '../../telegram/errors';
 import { installShutdownHandlers, onShutdown } from '../../util/shutdown';
-import { syncInboundRepliesForAccount } from '../../modules/messaging/syncInboundReplies';
+import { runDialogSessionsBatch } from '../../modules/dialog/batchTick';
+import { inboundRepliesTick } from './inboundSyncTick';
 
 function ymdInTz(d: Date, tz: string): string {
   return new Intl.DateTimeFormat('en-CA', {
@@ -165,36 +166,13 @@ async function promoteWarmedAccounts(): Promise<void> {
   );
 }
 
-async function inboundRepliesTick(): Promise<void> {
-  const accounts = await AccountModel.find({
-    status: { $in: ['active', 'warming'] },
-    sessionEnc: { $ne: '' },
-  }).limit(10);
-
-  for (const acc of accounts) {
-    try {
-      const proxy = acc.proxyId ? await ProxyModel.findById(acc.proxyId) : null;
-      assertMtProxyPolicy(acc, proxy);
-      const { saved } = await syncInboundRepliesForAccount(acc, proxy);
-      if (saved > 0) {
-        logger.info({ accountId: acc._id, saved }, 'scheduler: inbound replies saved');
-      }
-    } catch (err) {
-      if (err instanceof MissingTelegramApiCredentialsError) {
-        continue;
-      }
-      if (err instanceof TgDomainError && (err.kind === 'auth_invalid' || err.kind === 'phone_banned')) {
-        await AccountModel.findByIdAndUpdate(acc._id, {
-          $set: {
-            status: 'banned',
-            lastErrorCode: err.code,
-            lastErrorMessage: err.message,
-          },
-        });
-        continue;
-      }
-      logger.warn({ err, accountId: acc._id }, 'scheduler: inbound replies sync failed');
-    }
+async function dialogSessionsTick(): Promise<void> {
+  const r = await runDialogSessionsBatch();
+  if (r.processed > 0 || r.errors > 0) {
+    logger.info(
+      { scanned: r.scanned, claimed: r.claimed, processed: r.processed, errors: r.errors },
+      'scheduler: dialog batch tick',
+    );
   }
 }
 
@@ -217,6 +195,9 @@ async function main(): Promise<void> {
     }),
     cron.schedule('* * * * *', () => {
       inboundRepliesTick().catch((err) => logger.error({ err }, 'scheduler: inbound replies failed'));
+    }),
+    cron.schedule('* * * * *', () => {
+      dialogSessionsTick().catch((err) => logger.error({ err }, 'scheduler: dialog sessions failed'));
     }),
   ];
 
