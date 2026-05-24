@@ -94,6 +94,8 @@ paru -S mongodb-bin
 # or: yay -S mongodb-bin
 ```
 
+This often installs **MongoDB 8.x**. Docker Compose in this repo uses image **`mongo:8.2`** when you bind-mount the same data directory.
+
 The package may include a **systemd** unit only. On OpenRC you can still run the daemon manually or write a small service. **Simplest for development:** run `mongod` in a terminal.
 
 Create a data directory and config directory (your user can own these):
@@ -122,6 +124,27 @@ mongod --config ~/var/mongodb/mongod.conf
 ```
 
 Leave this terminal open, or add an OpenRC `mongod` script later if you want it supervised.
+
+Shortcut from the repo (foreground):
+
+```bash
+npm run mongod:local
+```
+
+**If `mongod` exits immediately** — check `~/var/mongodb/logs/mongod.log`. Common after Docker Compose:
+
+```text
+Unable to read the storage engine metadata file ... storage.bson
+```
+
+Data files are owned by uid **999** (container user). Fix ownership once, then start again:
+
+```bash
+sudo chown -R "$USER:$USER" ~/var/mongodb/data ~/var/mongodb/logs
+npm run mongod:local
+```
+
+Do **not** run native `mongod` and Docker `mongo` on the same `MONGO_DATA_DIR` at the same time.
 
 `**.env` (Mongo — matches default URI in the project):**
 

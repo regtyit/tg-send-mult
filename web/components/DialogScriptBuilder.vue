@@ -1,11 +1,54 @@
 <template>
   <v-card variant="outlined" class="pa-4">
     <v-card-title class="text-subtitle-1 px-0 pt-0">Create dialog script</v-card-title>
-    <p class="text-body-2 text-medium-emphasis mb-4">
-      A script is the message script two accounts follow — like a short chat. You will attach it to a
-      <strong>session</strong> later (who is Sender A and who replies).
+    <p class="text-body-2 text-medium-emphasis mb-3">
+      A <strong>script</strong> is the chat two accounts will follow. Pick a ready-made template below
+      (fills all lines), or type lines yourself, then <strong>Save script</strong>.
     </p>
 
+    <v-card v-if="humanPresets.length" variant="tonal" color="primary" class="pa-3 mb-4">
+      <div class="text-subtitle-2 font-weight-medium mb-2">1. Load a human dialog template</div>
+      <p class="text-caption mb-3">
+        This is the easiest start — not the same as campaign «Templates» (spintax). Choose a preset,
+        click <strong>Load into form</strong>, then save or go straight to a session.
+      </p>
+      <v-row dense align="center">
+        <v-col cols="12" md="8">
+          <v-autocomplete
+            v-model="builderPresetSlug"
+            :items="humanPresets"
+            item-title="name"
+            item-value="slug"
+            label="Human dialog template"
+            placeholder="e.g. casual coffee, weekend RU…"
+            variant="outlined"
+            density="comfortable"
+            hide-details
+            clearable
+          >
+            <template #item="{ props: itemProps, item }">
+              <v-list-item v-bind="itemProps" :subtitle="item.raw.description" />
+            </template>
+          </v-autocomplete>
+        </v-col>
+        <v-col cols="12" md="4">
+          <v-btn
+            block
+            color="primary"
+            :disabled="!builderPresetSlug"
+            :loading="loadingHumanPreset"
+            @click="requestLoadPreset"
+          >
+            Load into form
+          </v-btn>
+        </v-col>
+      </v-row>
+    </v-card>
+    <v-alert v-else type="warning" variant="tonal" density="compact" class="mb-4">
+      Templates list did not load — refresh the page. You can still type lines manually below.
+    </v-alert>
+
+    <p class="text-subtitle-2 mb-2">2. Script name (required to save)</p>
     <v-text-field
       v-model="name"
       label="Script name"
@@ -15,7 +58,7 @@
       class="mb-4"
     />
 
-    <p class="text-subtitle-2 mb-2">How should messages be chosen?</p>
+    <p class="text-subtitle-2 mb-2">3. How should messages be chosen?</p>
     <v-radio-group v-model="mode" hide-details class="mb-4">
       <v-radio value="turns">
         <template #label>
@@ -136,7 +179,9 @@
 
       <v-btn variant="tonal" prepend-icon="mdi-plus" class="mb-3" @click="addTurn">Add another line</v-btn>
 
-      <v-btn size="small" variant="text" class="mb-2" @click="fillExample">Fill example conversation</v-btn>
+      <v-btn size="small" variant="text" class="mb-2" @click="fillExample">
+        Fill tiny demo (2 lines) — or use «Load into form» above for full presets
+      </v-btn>
 
       <v-card v-if="previewLines.length" variant="tonal" class="pa-3 mb-2">
         <div class="text-caption text-medium-emphasis mb-2">Preview</div>
@@ -277,12 +322,21 @@ export interface DraftTurn {
   pauseSec: number;
 }
 
+export interface HumanPresetPickerItem {
+  slug: string;
+  name: string;
+  description?: string;
+}
+
 const props = defineProps<{
   templates: Array<{ _id: string; name: string; body?: string }>;
+  humanPresets?: HumanPresetPickerItem[];
+  loadingHumanPreset?: boolean;
   saving?: boolean;
 }>();
 
 const emit = defineEmits<{
+  loadPreset: [slug: string];
   save: [
     payload: {
       name: string;
@@ -311,6 +365,14 @@ function delayRangeFromPause(pauseSec: number): { min: number; max: number } {
   if (base === 0) return { min: 0, max: 0 };
   const spread = Math.max(3, Math.round(base * 0.15));
   return { min: Math.max(0, base - spread), max: base + spread };
+}
+
+const humanPresets = computed(() => props.humanPresets ?? []);
+const builderPresetSlug = ref<string | null>(null);
+
+function requestLoadPreset(): void {
+  if (!builderPresetSlug.value) return;
+  emit('loadPreset', builderPresetSlug.value);
 }
 
 const name = ref('');
@@ -473,7 +535,45 @@ function getName(): string {
   return name.value;
 }
 
-defineExpose({ resetForm, getName });
+export interface PresetLoadInput {
+  name: string;
+  typingSec?: number;
+  defaultDelaySecMin?: number;
+  defaultDelaySecMax?: number;
+  turns: Array<{
+    side: 'a' | 'b';
+    text: string;
+    waitForText?: string;
+    delaySecMin: number;
+    delaySecMax: number;
+  }>;
+}
+
+function loadFromPreset(detail: PresetLoadInput & { slug?: string }): void {
+  const stripped = detail.name.replace(/^Preset:\s*/i, '').trim();
+  name.value = stripped || detail.name;
+  if (detail.slug) builderPresetSlug.value = detail.slug;
+  mode.value = 'turns';
+  const avgDefault = Math.round(
+    ((detail.defaultDelaySecMin ?? 30) + (detail.defaultDelaySecMax ?? 90)) / 2,
+  );
+  defaultPauseSec.value = avgDefault;
+  typingSec.value = detail.typingSec ?? 3;
+  turns.value = detail.turns.map((t, idx) => ({
+    side: t.side,
+    contentMode: 'text' as const,
+    text: t.text,
+    templateId: '',
+    waitForText: idx > 0 ? (t.waitForText ?? '').trim() : '',
+    pauseSec: Math.max(5, Math.round((t.delaySecMin + t.delaySecMax) / 2)),
+  }));
+}
+
+function setBuilderPresetSlug(slug: string | null): void {
+  builderPresetSlug.value = slug;
+}
+
+defineExpose({ resetForm, getName, loadFromPreset, setBuilderPresetSlug });
 </script>
 
 <style scoped>

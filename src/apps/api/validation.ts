@@ -287,22 +287,36 @@ export const dialogScriptImportBody = z
 
 export const dialogPresetApplyBody = z
   .object({
-    slug: z.string().trim().min(1).max(80),
+    slug: z.string().trim().min(1).max(80).optional(),
     replace: z.boolean().optional().default(false),
   })
   .strict();
 
+export const dialogPresetsQuery = z
+  .object({
+    lang: z.enum(['en', 'ru']).optional(),
+    category: z.enum(['social', 'work', 'support', 'logistics']).optional(),
+  })
+  .strict();
+
+export const dialogPresetSlugParams = z.object({ slug: z.string().trim().min(1).max(80) }).strict();
+
 export const dialogSessionCreateBody = z
   .object({
     name: z.string().trim().max(200).optional().default(''),
-    scriptId: objectIdString,
+    scriptId: objectIdString.optional(),
+    /** Built-in human dialog template; creates/reuses script in DB when scriptId omitted. */
+    presetSlug: z.string().trim().min(1).max(80).optional(),
     accountAId: objectIdString,
     peerType: z.enum(['account', 'contact']),
     peerAccountId: objectIdString.optional(),
     peerContactId: objectIdString.optional(),
     runMode: z.enum(['auto', 'manual']).optional().default('manual'),
   })
-  .strict();
+  .strict()
+  .refine((b) => Boolean(b.scriptId || b.presetSlug), {
+    message: 'scriptId or presetSlug required',
+  });
 
 export const bulkImportBody = z
   .object({

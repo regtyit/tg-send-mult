@@ -22,6 +22,9 @@ import {
 import { totalTurnsForScript } from '../../modules/dialog/planTurn';
 import {
   HUMAN_DIALOG_PRESETS,
+  filterHumanDialogPresets,
+  getHumanDialogPreset,
+  humanDialogPresetDetail,
   humanDialogPresetSummary,
   upsertAllHumanDialogPresets,
   upsertHumanDialogPreset,
@@ -100,8 +103,23 @@ export function registerDialogCommands(program: Command): void {
   presets
     .command('list')
     .description('List built-in presets (not yet in DB until applied)')
-    .action(() => {
-      console.table(HUMAN_DIALOG_PRESETS.map(humanDialogPresetSummary));
+    .option('--lang <code>', 'Filter: en or ru')
+    .option('--category <cat>', 'Filter: social, work, support, logistics')
+    .action((opts) => {
+      const list = filterHumanDialogPresets({
+        lang: opts.lang ? String(opts.lang) : undefined,
+        category: opts.category ? String(opts.category) : undefined,
+      });
+      console.table(list.map(humanDialogPresetSummary));
+    });
+
+  presets
+    .command('show <slug>')
+    .description('Show full preset (all turns)')
+    .action((slug) => {
+      const p = getHumanDialogPreset(String(slug));
+      if (!p) throw new Error(`Unknown preset: ${slug}`);
+      console.log(JSON.stringify(humanDialogPresetDetail(p), null, 2));
     });
 
   presets
@@ -227,7 +245,8 @@ export function registerDialogCommands(program: Command): void {
   sessions
     .command('create')
     .description('Create a dialog session')
-    .requiredOption('--script <id>')
+    .option('--script <id>', 'Saved dialog script id')
+    .option('--preset <slug>', 'Built-in human dialog template slug')
     .requiredOption('--account-a <ref>', 'Sender A: id, +phone, or @username')
     .option('--peer-account <ref>', 'Peer account (account peer)')
     .option('--peer-contact <id>', 'Peer contact id')
@@ -255,7 +274,17 @@ export function registerDialogCommands(program: Command): void {
         throw new Error('Provide --peer-account or --peer-contact');
       }
 
-      const script = await DialogScriptModel.findById(opts.script);
+      let scriptId: Types.ObjectId | undefined;
+      if (opts.preset) {
+        const applied = await upsertHumanDialogPreset(String(opts.preset), false);
+        scriptId = new Types.ObjectId(applied.id);
+      } else if (opts.script) {
+        scriptId = new Types.ObjectId(String(opts.script));
+      } else {
+        throw new Error('Provide --script <id> or --preset <slug>');
+      }
+
+      const script = await DialogScriptModel.findById(scriptId);
       if (!script) throw new Error('script not found');
 
       const doc = await DialogSessionModel.create({

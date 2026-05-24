@@ -16,13 +16,17 @@ import {
 } from '../../../modules/dialog/importScript';
 import { totalTurnsForScript } from '../../../modules/dialog/planTurn';
 import {
-  HUMAN_DIALOG_PRESETS,
+  filterHumanDialogPresets,
+  getHumanDialogPreset,
+  humanDialogPresetDetail,
   humanDialogPresetSummary,
   upsertAllHumanDialogPresets,
   upsertHumanDialogPreset,
 } from '../../../modules/dialog/humanDialogTemplates';
 import {
   dialogPresetApplyBody,
+  dialogPresetSlugParams,
+  dialogPresetsQuery,
   dialogScriptCreateBody,
   dialogScriptImportBody,
   dialogSessionCreateBody,
@@ -35,17 +39,41 @@ export async function registerDialogRoutes(r: FastifyInstance): Promise<void> {
     DialogScriptModel.find().sort({ updatedAt: -1 }).lean(),
   );
 
-  r.get('/dialog-scripts/presets', async () => ({
-    presets: HUMAN_DIALOG_PRESETS.map(humanDialogPresetSummary),
-  }));
+  r.get('/dialog-scripts/presets', async (req) => {
+    const q = dialogPresetsQuery.safeParse(req.query ?? {});
+    const filters = q.success ? q.data : {};
+    const list = filterHumanDialogPresets(filters);
+    return { presets: list.map(humanDialogPresetSummary) };
+  });
+
+  r.get('/dialog-scripts/presets/:slug', async (req, reply) => {
+    const params = validate(reply, dialogPresetSlugParams, req.params ?? {}, 'params');
+    if (!params) return;
+    const preset = getHumanDialogPreset(params.slug);
+    if (!preset) return reply.code(404).send({ error: 'preset_not_found' });
+    return humanDialogPresetDetail(preset);
+  });
 
   r.post('/dialog-scripts/presets/apply', async (req, reply) => {
     const body = validate(reply, dialogPresetApplyBody, req.body ?? {});
     if (!body) return;
-    const r = await upsertHumanDialogPreset(body.slug, body.replace);
-    const doc = await DialogScriptModel.findById(r.id).lean();
+    if (!body.slug?.trim()) {
+      return reply.code(400).send({ error: 'slug_required' });
+    }
+    const applied = await upsertHumanDialogPreset(body.slug.trim(), body.replace);
+    const doc = await DialogScriptModel.findById(applied.id).lean();
     if (!doc) return reply.code(404).send({ error: 'not_found' });
-    return { ...r, script: doc };
+    return { ...applied, script: doc };
+  });
+
+  r.post('/dialog-scripts/presets/:slug/apply', async (req, reply) => {
+    const params = validate(reply, dialogPresetSlugParams, req.params ?? {}, 'params');
+    if (!params) return;
+    const body = validate(reply, dialogPresetApplyBody, req.body ?? {}) ?? { replace: false };
+    const applied = await upsertHumanDialogPreset(params.slug, body.replace ?? false);
+    const doc = await DialogScriptModel.findById(applied.id).lean();
+    if (!doc) return reply.code(404).send({ error: 'not_found' });
+    return { ...applied, script: doc };
   });
 
   r.post('/dialog-scripts/presets/apply-all', async (req, reply) => {
@@ -122,12 +150,21 @@ export async function registerDialogRoutes(r: FastifyInstance): Promise<void> {
       if (!contact) return reply.code(404).send({ error: 'peer_contact_not_found' });
     }
 
-    const script = await DialogScriptModel.findById(body.scriptId);
+    let scriptId = body.scriptId;
+    if (body.presetSlug) {
+      const applied = await upsertHumanDialogPreset(body.presetSlug, false);
+      scriptId = applied.id;
+    }
+    if (!scriptId) {
+      return reply.code(400).send({ error: 'script_required' });
+    }
+
+    const script = await DialogScriptModel.findById(scriptId);
     if (!script) return reply.code(404).send({ error: 'script_not_found' });
 
     const doc = await DialogSessionModel.create({
       name: body.name ?? '',
-      scriptId: body.scriptId,
+      scriptId,
       accountAId: body.accountAId,
       peerType: body.peerType,
       peerAccountId: body.peerType === 'account' ? body.peerAccountId : null,

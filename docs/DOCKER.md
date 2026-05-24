@@ -2,6 +2,20 @@
 
 Run the full stack (MongoDB, **Valkey**, API, worker, scheduler) on **localhost** with the dashboard at **http://127.0.0.1:3048**.
 
+**See also:** [USER_GUIDE.md](USER_GUIDE.md) (operations) · [SETUP_ARTIX.md](SETUP_ARTIX.md) (native Mongo/Valkey on Artix)
+
+## npm scripts
+
+| Command | Purpose |
+|---------|---------|
+| `npm run docker:doctor` | Docker daemon, buildx, `docker` group |
+| `npm run docker:sync-data` | Copy host `dump.rdb` / hint for Mongo paths |
+| `npm run docker:build` | Build app image |
+| `npm run docker:up` | Start stack detached |
+| `npm run docker:ps` | Container status |
+| `npm run docker:logs` | Follow logs |
+| `npm run docker:down` | Stop and remove containers |
+
 The app uses **BullMQ** over the Redis protocol (`REDIS_*` in `.env`). [Valkey](https://valkey.io/) is a drop-in replacement — no code changes. On the host (Artix) you may run `valkey` instead of `redis`; inside Compose the service is named `valkey`.
 
 ## Prerequisites

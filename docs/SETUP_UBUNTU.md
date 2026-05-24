@@ -2,6 +2,8 @@
 
 Tested on Ubuntu 22.04 and 24.04. Equivalent steps work on Debian 12+.
 
+**Alternative:** run everything in Docker — [DOCKER.md](DOCKER.md) (dashboard on port **3048**).
+
 ---
 
 ## 1. Base packages
@@ -23,7 +25,9 @@ node -v   # v20.x
 
 ---
 
-## 2. Redis
+## 2. Redis (or Valkey)
+
+The app uses the **Redis protocol** (`REDIS_*` in `.env`). Ubuntu packages ship **Redis**:
 
 ```bash
 sudo apt install -y redis-server
@@ -33,6 +37,8 @@ redis-cli ping     # PONG
 
 `/etc/redis/redis.conf` is bound to `127.0.0.1:6379` by default. If you set
 `requirepass`, mirror it in `.env` as `REDIS_PASSWORD`.
+
+> **Valkey** from third-party repos works the same way (`REDIS_HOST=127.0.0.1`).
 
 ---
 

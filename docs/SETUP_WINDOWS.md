@@ -1,7 +1,9 @@
 # Setup on Windows 10 / 11
 
 All commands below assume **PowerShell 7+**. If you prefer WSL, follow
-`[SETUP_UBUNTU.md](SETUP_UBUNTU.md)` inside the WSL distribution instead.
+[SETUP_UBUNTU.md](SETUP_UBUNTU.md) inside the WSL distribution instead.
+
+**Alternative:** [DOCKER.md](DOCKER.md) — full stack in containers (dashboard **http://127.0.0.1:3048**).
 
 ---
 

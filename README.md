@@ -17,14 +17,15 @@
 | **Per-account proxies** | MTProxy (incl. FakeTLS), SOCKS5, or direct; one proxy per sender, with optional auto-assign by phone country. |
 | **Anti-limit pacing** | Daily caps, hourly rates, sending windows, lognormal jitter, warm-up status, health scores, flood-wait backoff. |
 | **Delivery verification** | Mark accounts as `test_recipient`, sync their inbox, and confirm campaign messages actually arrived. |
-| **Web dashboard** | Senders, proxies, contacts, templates, campaigns — plus BullMQ queue monitor. |
+| **Web dashboard** | Senders, proxies, contacts, templates, campaigns, **dialogs** — plus BullMQ queue monitor. |
+| **Dialog simulation** | Ready-made human-style chat scripts (presets), sessions between two senders, manual or auto turns. |
 | **CLI + REST API** | Same operations available headless for automation. |
 
 ## What it is not
 
 - **Not a Telegram Bot API product.** It uses **user accounts** (MTProto via Telethon). You need real phone numbers and sessions.
 - **Not a guarantee against bans.** Telegram limits bulk outreach aggressively. This tool throttles and handles errors — it does not bypass Telegram policy.
-- **Not plug-and-play.** You install Node 20, Python 3, MongoDB 7, and Redis 7 yourself.
+- **Not plug-and-play.** You install Node 20, Python 3, MongoDB (7+; Artix often uses 8.x), and **Valkey** or Redis yourself — or use [Docker Compose](docs/DOCKER.md).
 
 For behavioral guidance and limit context, see [docs/TELEGRAM_SPAM_AND_LIMITS.md](docs/TELEGRAM_SPAM_AND_LIMITS.md).
 
@@ -45,7 +46,7 @@ flowchart LR
   end
   subgraph data [Data stores]
     Mongo[(MongoDB)]
-    Redis[(Redis)]
+    Redis[(Valkey / Redis)]
   end
   subgraph tg [Telegram]
     Py[Telethon bridge]
@@ -114,6 +115,7 @@ flowchart LR
 | [Setup: Ubuntu / Debian](docs/SETUP_UBUNTU.md) | First install on Linux |
 | [Setup: Windows](docs/SETUP_WINDOWS.md) | First install on Windows |
 | [Setup: Artix Linux](docs/SETUP_ARTIX.md) | First install on Artix (OpenRC) |
+| [Docker Compose (local)](docs/DOCKER.md) | All-in-one stack on port **3048** |
 | [Telegram limits & safety](docs/TELEGRAM_SPAM_AND_LIMITS.md) | Why throttling exists; error semantics |
 
 ---
@@ -122,8 +124,8 @@ flowchart LR
 
 - **Node.js 20 + TypeScript 5** — API, worker, scheduler, CLI
 - **Telethon (Python)** — MTProto bridge at `python/tg_worker/run.py` (stdio JSON from Node)
-- **MongoDB 7 + Mongoose** — accounts, contacts, campaigns, messages, proxies, delivery events
-- **Redis 7 + BullMQ** — per-account send queues + [Bull Board](http://localhost:3000/admin/queues)
+- **MongoDB 7+ + Mongoose** — accounts, contacts, campaigns, messages, proxies, delivery events
+- **Valkey / Redis + BullMQ** — per-account send queues + [Bull Board](http://localhost:3000/admin/queues)
 - **Fastify v5** — REST API (Basic Auth) + static SPA
 - **Nuxt 3 + Vuetify 3** — dashboard SPA (built into `src/apps/api/public`)
 - **Vitest** — 170 unit tests; no live Telegram connection required
@@ -198,6 +200,7 @@ tg send-test --account <ref> --to <peer> --text "..."
 tg contacts import <file.csv|json>
 tg templates create --name <n> --body "..."
 tg campaign create | start | pause | resume | stats | verify
+tg dialog scripts presets list | dialog sessions create --preset <slug> ...
 ```
 
 Full reference: [User guide — CLI reference](docs/USER_GUIDE.md#cli-reference).
@@ -211,7 +214,7 @@ Full reference: [User guide — CLI reference](docs/USER_GUIDE.md#cli-reference)
 - Metrics: `GET /metrics` (Prometheus-style counters)
 - Bull Board: `/admin/queues`
 
-Notable routes: accounts (CRUD, session import, send-test, inbox sync, MTProxy assign), proxies, contacts import/list, templates, campaigns (start/pause/resume/verify/results), messages, inbound-replies.
+Notable routes: accounts, proxies, contacts, templates, campaigns, **dialog-scripts / presets / sessions**, messages, inbound-replies.
 
 Full list: [User guide — REST API](docs/USER_GUIDE.md#rest-api).
 
@@ -229,6 +232,14 @@ npm test
 npm run lint
 npm run typecheck
 ```
+
+**Helper scripts:**
+
+| Command | Purpose |
+|---------|---------|
+| `npm run mongod:local` | Start local MongoDB (Artix-style config) |
+| `npm run docker:doctor` | Check Docker socket, buildx, permissions |
+| `npm run docker:up` | Full stack via Compose → [DOCKER.md](docs/DOCKER.md) |
 
 **Production notes:** set `NODE_ENV=production`, change `API_BASIC_USER` / `API_BASIC_PASSWORD` (≥ 12 chars), and configure `CORS_ALLOWED_ORIGINS` if the dashboard is on another origin. The app refuses to start in production with default credentials.
 

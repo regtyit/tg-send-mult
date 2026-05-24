@@ -16,12 +16,13 @@ This guide explains how to operate the app day to day: what each part means, how
 8. [Contacts and audience](#contacts-and-audience)
 9. [Templates and spintax](#templates-and-spintax)
 10. [Campaigns](#campaigns)
-11. [Verify deliveries](#verify-deliveries)
-12. [CLI reference](#cli-reference)
-13. [REST API](#rest-api)
-14. [Scheduler background jobs](#scheduler-background-jobs)
-15. [Troubleshooting](#troubleshooting)
-16. [Safety and compliance](#safety-and-compliance)
+11. [Dialogs (simulation)](#dialogs-dialogs)
+12. [Verify deliveries](#verify-deliveries)
+13. [CLI reference](#cli-reference)
+14. [REST API](#rest-api)
+15. [Scheduler background jobs](#scheduler-background-jobs)
+16. [Troubleshooting](#troubleshooting)
+17. [Safety and compliance](#safety-and-compliance)
 
 ---
 
@@ -35,6 +36,8 @@ The app separates **who sends** from **who receives**:
 | **Contact (recipient)** | Contacts page, MongoDB `contacts` | A person you may message — identified by **E.164 phone** or **@username**. Imported from CSV/JSON or added manually. |
 | **Template** | Templates page | Message body with placeholders and optional spintax. |
 | **Campaign** | Campaigns page | Binds **senders** + **audience** + **template**, then enqueues delivery jobs. |
+| **Dialog script** | Dialogs page | Ordered chat lines (A/B) for **simulation** between two senders — not campaign mail. |
+| **Dialog preset** | Dialogs → templates | Built-in ready-made scripts (22+); load into builder or session. |
 | **Message** | MongoDB `messages` | One outbound attempt: rendered text, status (`queued` → `sent` / `failed`), errors, sender used. |
 
 You do **not** message people by picking @handles on the Senders page. Senders are your outbound Telegram accounts; recipients always come from Contacts.
@@ -54,8 +57,8 @@ You do **not** message people by picking @handles on the Senders page. Senders a
 
 - **Node.js 20+**
 - **Python 3** with Telethon (via `npm run setup:python`)
-- **MongoDB 7**
-- **Redis 7**
+- **MongoDB 7+** (Artix AUR often ships **8.x** — use matching Docker image if containerized)
+- **Valkey or Redis 7+** (BullMQ; env vars stay `REDIS_*`)
 - **Telegram API credentials** (`api_id` + `api_hash` from [my.telegram.org](https://my.telegram.org)) — per account or global fallback in `.env`
 - **MTProxy** (recommended) for CLI login and sending — the CLI requires an explicit proxy for Telegram actions
 
@@ -64,6 +67,7 @@ Install steps are OS-specific:
 - [SETUP_UBUNTU.md](SETUP_UBUNTU.md)
 - [SETUP_WINDOWS.md](SETUP_WINDOWS.md)
 - [SETUP_ARTIX.md](SETUP_ARTIX.md)
+- [DOCKER.md](DOCKER.md) — optional all-in-one stack (no separate Mongo/Valkey install)
 
 ### Environment essentials
 
@@ -73,7 +77,7 @@ Copy `.env.example` to `.env` and set at minimum:
 |----------|---------|
 | `SESSION_KEY` | 64-character hex key encrypting Telegram sessions in MongoDB |
 | `MONGO_URI` | MongoDB connection string |
-| `REDIS_HOST` / `REDIS_PORT` | BullMQ job backend |
+| `REDIS_HOST` / `REDIS_PORT` | BullMQ backend (Valkey on Artix — same protocol) |
 | `API_BASIC_USER` / `API_BASIC_PASSWORD` | Dashboard and API login |
 
 Generate `SESSION_KEY`:
@@ -111,6 +115,21 @@ Run **three processes** (development or production):
 - **Health check:** `GET /health` (no auth)
 
 If the worker or scheduler is not running, campaigns will enqueue jobs but messages will not leave the queue (or inbox sync will not run).
+
+### Option B — Docker Compose
+
+See [DOCKER.md](DOCKER.md). Summary:
+
+```bash
+npm run docker:doctor    # once: Docker running, buildx, group membership
+npm run docker:sync-data # optional: copy host Mongo/Valkey data
+npm run docker:build
+npm run docker:up
+```
+
+Dashboard: **http://127.0.0.1:3048** (not 3000). For API on the host talking to Docker DBs, use `MONGO_URI=mongodb://127.0.0.1:27018/...` and `REDIS_HOST=127.0.0.1` + port **6380**.
+
+Do not run native `mongod`/`valkey` and Docker with the **same data directories** at once.
 
 ---
 
@@ -187,7 +206,23 @@ Create, start, pause, resume, view results, and verify campaigns.
 
 Simulate natural Q&amp;A between two **senders** or between a sender and a **contact** (trusted recipient).
 
-- **Human dialog templates** — six built-in casual scripts (coffee check-in, work handoff, RU weekend chat, running late, gentle feedback, long-day support). Click **Add to library**, then pick the script when creating a session.
+#### Using a preset (step by step)
+
+A **preset** is a ready-made chat script (who says what, with pauses). It is **not** the same as **Templates** (campaign spintax on the Templates page) or **Use message templates** in the script builder (alternating Q/A templates).
+
+**Fastest path**
+
+1. **Dialogs** → card **Create dialog script** → section **1. Load a human dialog template**.
+2. Pick e.g. `Preset: casual coffee check-in` → **Load into form** (lines A/B appear).
+3. Scroll to **Start a session** → **Sender A** + **Sender B** (two senders for full chat).
+4. **Dialog script or template** → choose the same preset (under *Built-in templates*).
+5. **Create session** → in **Sessions** (right): **Start** or **Step**. For auto mode, run `dev:worker` + `dev:scheduler`.
+
+**Also from the top of the page:** **Human dialog templates** → **Choose template** → preview → **Use in new session** (skips loading the builder).
+
+**Optional:** **Add to library** saves the preset under **Saved scripts**. **Save script** in the builder after editing lines.
+
+- **Human dialog templates** — 22 built-in casual scripts (EN + RU). Filter chips, preview, then **Use in new session** or **Add to library**.
 - **Scripts** — manual turn list (`side` = `a` or `b`, `text`, delays) or **template pairs** (question/answer templates × rounds).
 - **Sessions** — pick sender A, peer (another sender or contact), script, and **manual** or **automatic** run mode.
 - **Step / Start** — executes the next message; auto mode uses the scheduler and `dialog-turn` queue.
@@ -519,17 +554,19 @@ dialog scripts list | show <id> | delete <id>
 dialog scripts create -n <name> --json <turns.json>
 dialog scripts import -n <name> [--csv <file> | --json <file>]
 dialog scripts presets list
+dialog scripts presets list [--lang en|ru] [--category social|work|support|logistics]
+dialog scripts presets show <slug>
 dialog scripts presets apply <slug> [--replace]
 dialog scripts presets apply-all [--replace]
 
 dialog sessions list [--status <s>] [--limit <n>]
 dialog sessions show <id>
-dialog sessions create --script <id> --account-a <ref> [--peer-account <ref> | --peer-contact <id>] [--run-mode auto|manual]
+dialog sessions create (--script <id> | --preset <slug>) --account-a <ref> [--peer-account <ref> | --peer-contact <id>] [--run-mode auto|manual]
 dialog sessions start <id> | pause <id> | step <id> | stats
 dialog sessions bulk-start [--status draft] [--run-mode auto] [--limit <n>]
 ```
 
-Preset slugs: `coffee-catchup`, `work-handoff`, `weekend-plans-ru`, `running-late`, `feedback-soft`, `after-long-day`.
+Preset slugs (partial): `coffee-catchup`, `work-handoff`, `weekend-plans-ru`, `walk-after-work`, `movie-pick`, `delivery-ru`, `docs-check-ru`, … — run `npm run cli -- dialog scripts presets list` for the full list.
 
 ---
 
@@ -586,11 +623,13 @@ Auth: HTTP Basic (`API_BASIC_USER` / `API_BASIC_PASSWORD`)
 | Method | Path | Description |
 |--------|------|-------------|
 | GET/POST/DELETE | `/dialog-scripts`, `/dialog-scripts/:id` | Script CRUD |
-| GET | `/dialog-scripts/presets` | List built-in human dialog templates |
-| POST | `/dialog-scripts/presets/apply` | Add one preset to library (`slug`, optional `replace`) |
+| GET | `/dialog-scripts/presets` | List built-in templates (`?lang=en`, `?category=social`) |
+| GET | `/dialog-scripts/presets/:slug` | Full template with all turns (preview) |
+| POST | `/dialog-scripts/presets/apply` | Add one preset (`{ slug, replace? }`) |
+| POST | `/dialog-scripts/presets/:slug/apply` | Add preset by URL slug |
 | POST | `/dialog-scripts/presets/apply-all` | Add all presets (`replace` optional) |
 | POST | `/dialog-scripts/import` | Import turns CSV/JSON |
-| GET/POST | `/dialog-sessions` | List / create session |
+| GET/POST | `/dialog-sessions` | List / create session (`scriptId` or `presetSlug`) |
 | POST | `/dialog-sessions/:id/start` | Start (auto enqueues turns) |
 | POST | `/dialog-sessions/:id/step` | Manual next turn |
 | POST | `/dialog-sessions/:id/pause` | Pause |
@@ -672,7 +711,19 @@ With `NODE_ENV=production`, default credentials (`admin` / `changeme`) and passw
 npm run setup
 ```
 
-Fixes: valid `SESSION_KEY`, Mongo running, Redis PONG, Telethon importable (`npm run setup:python`).
+Fixes: valid `SESSION_KEY`, Mongo running, Valkey/Redis PONG (`valkey-cli ping` or `redis-cli ping`), Telethon importable (`npm run setup:python`).
+
+### API error `ECONNREFUSED 127.0.0.1:27017`
+
+MongoDB is not running. On Artix: `npm run mongod:local` or see [SETUP_ARTIX.md](SETUP_ARTIX.md). If data was used by Docker, fix ownership: `sudo chown -R "$USER:$USER" ~/var/mongodb/data ~/var/mongodb/logs`.
+
+### Docker Mongo exits immediately (exit 62)
+
+Host data is MongoDB **8.x** but the image was `mongo:7`. Use `mongo:8.2` in `docker-compose.yml` or a fresh volume. See [DOCKER.md](DOCKER.md).
+
+### Dialog presets dropdown empty
+
+API must be running and reachable. Check browser auth, then `GET /api/dialog-scripts/presets`. Restart `dev:api` after upgrades.
 
 ---
 
@@ -693,4 +744,5 @@ Technical background: [TELEGRAM_SPAM_AND_LIMITS.md](TELEGRAM_SPAM_AND_LIMITS.md)
 
 - [README](../README.md) — project overview and quick start
 - [SETUP_UBUNTU.md](SETUP_UBUNTU.md) · [SETUP_WINDOWS.md](SETUP_WINDOWS.md) · [SETUP_ARTIX.md](SETUP_ARTIX.md)
+- [DOCKER.md](DOCKER.md)
 - [TELEGRAM_SPAM_AND_LIMITS.md](TELEGRAM_SPAM_AND_LIMITS.md)
