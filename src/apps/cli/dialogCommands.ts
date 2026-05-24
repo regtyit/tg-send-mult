@@ -30,6 +30,10 @@ import {
   upsertHumanDialogPreset,
 } from '../../modules/dialog/humanDialogTemplates';
 import { resolveAccountSpecifiers } from '../../modules/accounts/resolveAccountSpecifiers';
+import {
+  WarmingPolicyError,
+  assertWarmingCanStartScriptForSession,
+} from '../../modules/accounts/warming';
 import { logger } from '../../logger';
 
 async function mapPool<T>(
@@ -310,6 +314,13 @@ export function registerDialogCommands(program: Command): void {
       const script = await DialogScriptModel.findById(session.scriptId);
       if (!script || totalTurnsForScript(script) === 0) throw new Error('Script has no turns');
 
+      try {
+        await assertWarmingCanStartScriptForSession(session);
+      } catch (err) {
+        if (err instanceof WarmingPolicyError) throw new Error(err.message);
+        throw err;
+      }
+
       await DialogSessionModel.updateOne(
         { _id: session._id },
         {
@@ -358,6 +369,13 @@ export function registerDialogCommands(program: Command): void {
           if (!session) return;
           const script = await DialogScriptModel.findById(session.scriptId);
           if (!script || totalTurnsForScript(script) === 0) return;
+
+          try {
+            await assertWarmingCanStartScriptForSession(session);
+          } catch {
+            failed += 1;
+            return;
+          }
 
           await DialogSessionModel.updateOne(
             { _id: session._id },
@@ -410,6 +428,12 @@ export function registerDialogCommands(program: Command): void {
       const session = await DialogSessionModel.findById(id);
       if (!session) throw new Error('Session not found');
       if (session.status === 'draft') {
+        try {
+          await assertWarmingCanStartScriptForSession(session);
+        } catch (err) {
+          if (err instanceof WarmingPolicyError) throw new Error(err.message);
+          throw err;
+        }
         await DialogSessionModel.updateOne({ _id: session._id }, { $set: { status: 'running' } });
       } else if (session.status === 'paused' || session.status === 'waiting_peer') {
         await DialogSessionModel.updateOne({ _id: session._id }, { $set: { status: 'running' } });

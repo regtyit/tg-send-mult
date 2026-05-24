@@ -10,6 +10,7 @@ import {
 import type { AccountDoc } from '../../db/models/Account';
 import type { ContactDoc } from '../../db/models/Contact';
 import type { DialogSessionDoc } from '../../db/models/DialogSession';
+import { recordWarmingScriptDayForSession } from '../accounts/warming';
 import { sendText } from '../messaging/send';
 import { pickDelayMs } from './delay';
 import { findPeerTriggerInbound } from './checkTrigger';
@@ -174,6 +175,7 @@ export async function executeDialogTurn(sessionId: Types.ObjectId): Promise<Exec
       { _id: session._id },
       { $set: { status: 'completed', completedAt: new Date(), nextRunAt: null } },
     );
+    await recordWarmingScriptDayForSession(session);
     return { done: true, turnIndex: session.currentTurn };
   }
 
@@ -312,6 +314,7 @@ export async function executeDialogTurn(sessionId: Types.ObjectId): Promise<Exec
         },
       },
     );
+    await recordWarmingScriptDayForSession(session);
     return { done: true, turnIndex: planned.turnIndex };
   }
 

@@ -14,6 +14,7 @@ import { recomputeHealthScore } from '../../modules/multi/health';
 import { assertMtProxyPolicy } from '../../modules/proxy/policy';
 import { TgDomainError } from '../../telegram/errors';
 import { installShutdownHandlers, onShutdown } from '../../util/shutdown';
+import { promoteWarmedAccounts } from '../../modules/accounts/warming';
 import { runDialogSessionsBatch } from '../../modules/dialog/batchTick';
 import { inboundRepliesTick } from './inboundSyncTick';
 
@@ -155,15 +156,11 @@ async function warmUpTick(): Promise<void> {
   }
 }
 
-async function promoteWarmedAccounts(): Promise<void> {
-  const now = new Date();
-  await AccountModel.updateMany(
-    {
-      status: 'warming',
-      warmingFinishesAt: { $lte: now },
-    },
-    { $set: { status: 'active' } },
-  );
+async function promoteWarmedAccountsTick(): Promise<void> {
+  const n = await promoteWarmedAccounts();
+  if (n > 0) {
+    logger.info({ count: n }, 'scheduler: promoted warmed accounts to active');
+  }
 }
 
 async function dialogSessionsTick(): Promise<void> {
@@ -189,7 +186,7 @@ async function main(): Promise<void> {
       warmUpTick().catch((err) => logger.error({ err }, 'scheduler: warm-up failed'));
     }),
     cron.schedule('*/5 * * * *', () => {
-      promoteWarmedAccounts().catch((err) =>
+      promoteWarmedAccountsTick().catch((err) =>
         logger.error({ err }, 'scheduler: promote failed'),
       );
     }),

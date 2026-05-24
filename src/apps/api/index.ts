@@ -445,7 +445,8 @@ async function main() {
         const { encryptSession } = await import('../../crypto/sessionCipher');
         acc.sessionEnc = encryptSession(body.sessionString.trim());
         acc.sessionAuthorizedAt = new Date();
-        acc.status = 'warming';
+        const { applyWarmingSchedule } = await import('../../modules/accounts/warming');
+        applyWarmingSchedule(acc);
         await acc.save();
         return sanitizeAccount(acc);
       });

@@ -316,7 +316,7 @@ new  ──► warming  ──► active
               │           └── banned (auth invalid / phone banned)
 ```
 
-- **warming** — new sessions; scheduler runs lightweight `get_state` checks; promotes to **active** when warm-up period ends.
+- **warming** — new sessions; run **one dialog script per calendar day** for **3 days** (account timezone), plus at most **1 campaign message/day** to new contacts. Scheduler runs lightweight `get_state` checks; promotes to **active** when `WARMUP_DAYS` have passed **and** three warm-up script days are recorded (`WARMUP_DAYS`, `WARMUP_MSGS_PER_DAY`, `WARMUP_SCRIPTS_PER_DAY` in `.env`).
 - **paused** — manual stop; not eligible to send.
 - **quarantined** — temporary block after severe errors.
 - **banned** — session dead or phone banned; requires re-auth or removal.
@@ -652,7 +652,7 @@ Auth: HTTP Basic (`API_BASIC_USER` / `API_BASIC_PASSWORD`)
 |----------|------|
 | Every minute | Reset daily counters (per account timezone); sync inbound replies (batch) |
 | Every 15 min | Warm-up `get_state` for `warming` accounts |
-| Every 5 min | Promote `warming` → `active` when warm-up period ends |
+| Every 5 min | Promote `warming` → `active` when 3 warm-up script days are done and `warmingFinishesAt` has passed |
 
 Inbound sync stores recent dialog text in `inbound_replies` for analytics and verification.
 

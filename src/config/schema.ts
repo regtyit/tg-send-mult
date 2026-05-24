@@ -65,6 +65,12 @@ export const envSchema = z
       .regex(/^[0-9a-fA-F]{64}$/, 'SESSION_KEY must be a 64-char hex string (32 bytes)'),
 
     DEFAULT_MSGS_PER_DAY: z.coerce.number().int().positive().default(80),
+    /** Days in `warming` before auto-promotion to `active` (requires warm-up scripts too). */
+    WARMUP_DAYS: z.coerce.number().int().positive().default(3),
+    /** Max outbound campaign messages per day while status is `warming`. */
+    WARMUP_MSGS_PER_DAY: z.coerce.number().int().positive().default(1),
+    /** Max completed dialog scripts per calendar day while status is `warming`. */
+    WARMUP_SCRIPTS_PER_DAY: z.coerce.number().int().positive().default(1),
     DEFAULT_RATE_PER_HOUR: z.coerce.number().int().positive().default(20),
     DEFAULT_WINDOW_START: timeHHMM.default('09:00'),
     DEFAULT_WINDOW_END: timeHHMM.default('22:00'),

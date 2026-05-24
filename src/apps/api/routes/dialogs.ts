@@ -8,6 +8,10 @@ import {
   DialogTurnModel,
   InboundReplyModel,
 } from '../../../db/models';
+import {
+  WarmingPolicyError,
+  assertWarmingCanStartScriptForSession,
+} from '../../../modules/accounts/warming';
 import { continueDialogSession } from '../../../modules/dialog/continueSession';
 import { executeDialogTurn } from '../../../modules/dialog/executeTurn';
 import {
@@ -187,6 +191,15 @@ export async function registerDialogRoutes(r: FastifyInstance): Promise<void> {
       return reply.code(400).send({ error: 'script_has_no_turns' });
     }
 
+    try {
+      await assertWarmingCanStartScriptForSession(session);
+    } catch (err) {
+      if (err instanceof WarmingPolicyError) {
+        return reply.code(400).send({ error: err.code, message: err.message });
+      }
+      throw err;
+    }
+
     await DialogSessionModel.updateOne(
       { _id: session._id },
       {
@@ -245,6 +258,14 @@ export async function registerDialogRoutes(r: FastifyInstance): Promise<void> {
     if (!session) return reply.code(404).send({ error: 'not_found' });
 
     if (session.status === 'draft') {
+      try {
+        await assertWarmingCanStartScriptForSession(session);
+      } catch (err) {
+        if (err instanceof WarmingPolicyError) {
+          return reply.code(400).send({ error: err.code, message: err.message });
+        }
+        throw err;
+      }
       await DialogSessionModel.updateOne(
         { _id: session._id },
         { $set: { status: 'running', currentTurn: 0 } },

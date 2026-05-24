@@ -9,6 +9,7 @@ import {
   MessageModel,
   ProxyModel,
 } from '../../db/models';
+import { warmingMsgsPerDayCap } from '../../modules/accounts/warming';
 import { lognormalDelayMs } from '../../modules/antilimit/jitter';
 import { isWithinCampaignWindow, isWithinSendingWindowAccount } from '../../modules/antilimit/window';
 import { sendText } from '../../modules/messaging/send';
@@ -146,10 +147,9 @@ export async function processSendMessageJob(
     return;
   }
 
-  // Safety ramp-up: newly warmed sender accounts can message only 1 recipient/day
-  // until explicitly promoted to active by operator.
   const baseLimit = account.dailyLimits?.msgsToNew ?? 80;
-  const limit = account.status === 'warming' ? Math.min(baseLimit, 1) : baseLimit;
+  const limit =
+    account.status === 'warming' ? warmingMsgsPerDayCap(baseLimit) : baseLimit;
   const used = account.dailyCounters?.msgsToNew ?? 0;
   if (used >= limit) {
     await MessageModel.updateOne(

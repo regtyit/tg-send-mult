@@ -4,6 +4,8 @@ import { encryptSession } from '../../crypto/sessionCipher';
 import { AccountModel, ProxyModel } from '../../db/models';
 import type { AccountDoc } from '../../db/models/Account';
 import { defaultDeviceProfile, type DeviceProfile } from '../../telegram/client';
+import { applyWarmingSchedule } from '../accounts/warming';
+import { applyWarmingSchedule } from '../accounts/warming';
 import { logSessionEvent } from './sessionEvents';
 import { buildGramJsStringSessionV1 } from './gramJsStringSession';
 import { connectWithSavedSession } from './connect';
@@ -103,10 +105,12 @@ export async function importSessionString(
       },
       ...(Object.keys(apiFromOpts).length ? apiFromOpts : apiFromEnv),
     });
+    applyWarmingSchedule(account);
+    await account.save();
   } else {
     account.sessionEnc = enc;
     account.sessionAuthorizedAt = new Date();
-    account.status = 'warming';
+    applyWarmingSchedule(account);
     if (opts.label) account.label = opts.label;
     if (proxyDoc) account.set('proxyId', proxyDoc._id);
     if (opts.deviceProfile) account.deviceProfile = opts.deviceProfile;

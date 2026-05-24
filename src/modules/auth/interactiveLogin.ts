@@ -13,6 +13,7 @@ import { runTelethonBridge, telethonCommon, unwrapTelethonBridge } from '../../t
 import { mapTgError, TgDomainError } from '../../telegram/errors';
 import { assertMtProxyPolicy } from '../proxy/policy';
 import { promptLoginCode, promptLoginPhone, promptTwoFactorPassword } from './loginInquirer';
+import { applyWarmingSchedule } from '../accounts/warming';
 import { logSessionEvent } from './sessionEvents';
 import { logger } from '../../logger';
 
@@ -146,13 +147,7 @@ export async function interactiveLogin(opts: InteractiveLoginOptions): Promise<A
     account.sessionAuthorizedAt = new Date();
     account.telegramApiId = creds.apiId;
     account.telegramApiHash = creds.apiHash;
-    account.status = account.status === 'banned' ? 'new' : 'warming';
-    if (!account.warmingStartedAt) {
-      account.warmingStartedAt = new Date();
-      const finish = new Date();
-      finish.setDate(finish.getDate() + 7);
-      account.warmingFinishesAt = finish;
-    }
+    applyWarmingSchedule(account);
     await account.save();
 
     await logSessionEvent(account._id, 'login_succeeded', {});

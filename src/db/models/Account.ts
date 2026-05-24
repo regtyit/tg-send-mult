@@ -113,6 +113,10 @@ const accountSchema = new Schema(
 
     warmingStartedAt: { type: Date, default: null },
     warmingFinishesAt: { type: Date, default: null },
+    /** Calendar days (in account TZ) with at least one completed warm-up dialog script. */
+    warmingScriptDaysCompleted: { type: Number, default: 0, min: 0 },
+    /** Last calendar day (YYYY-MM-DD) a warm-up script was counted. */
+    warmingLastScriptDay: { type: String, default: '' },
 
     lastUsedAt: { type: Date, default: null },
     lastInboundSyncAt: { type: Date, default: null },
