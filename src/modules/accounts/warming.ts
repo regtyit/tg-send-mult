@@ -1,4 +1,3 @@
-import type { Types } from 'mongoose';
 import { config } from '../../config';
 import { AccountModel } from '../../db/models';
 import type { AccountDoc } from '../../db/models/Account';
@@ -102,7 +101,7 @@ export async function assertWarmingCanStartScriptForSession(session: DialogSessi
 
 /** Count one completed warm-up script day for each warming participant. */
 export async function recordWarmingScriptDayForSession(session: DialogSessionDoc): Promise<void> {
-  const ids: Types.ObjectId[] = [session.accountAId];
+  const ids = [session.accountAId];
   if (session.peerType === 'account' && session.peerAccountId) {
     ids.push(session.peerAccountId);
   }
