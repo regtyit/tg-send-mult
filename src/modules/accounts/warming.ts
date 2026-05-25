@@ -101,7 +101,7 @@ export async function assertWarmingCanStartScriptForSession(session: DialogSessi
 
 /** Count one completed warm-up script day for each warming participant. */
 export async function recordWarmingScriptDayForSession(session: DialogSessionDoc): Promise<void> {
-  const ids = [session.accountAId];
+  const ids: string[] = [String(session.accountAId)];
   if (session.peerType === 'account' && session.peerAccountId) {
     ids.push(String(session.peerAccountId));
   }
