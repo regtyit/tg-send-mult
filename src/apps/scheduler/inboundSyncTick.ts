@@ -63,6 +63,9 @@ export async function inboundRepliesTick(): Promise<void> {
         });
         continue;
       }
+      if (err instanceof TgDomainError && err.code === 'BRIDGE_TIMEOUT') {
+        await AccountModel.updateOne({ _id: acc._id }, { $set: { lastInboundSyncAt: new Date() } });
+      }
       logger.warn({ err, accountId: acc._id }, 'scheduler: inbound replies sync failed');
     }
   }

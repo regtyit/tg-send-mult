@@ -438,7 +438,7 @@ export function registerDialogCommands(program: Command): void {
       } else if (session.status === 'paused' || session.status === 'waiting_peer') {
         await DialogSessionModel.updateOne({ _id: session._id }, { $set: { status: 'running' } });
       }
-      const result = await executeDialogTurn(new Types.ObjectId(id));
+      const result = await executeDialogTurn(new Types.ObjectId(id), { forcePeerCheck: true });
       console.log(JSON.stringify(result, null, 2));
       if (session.runMode === 'auto' && !result.done) {
         await continueDialogSession(id);

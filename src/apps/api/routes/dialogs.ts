@@ -282,7 +282,7 @@ export async function registerDialogRoutes(r: FastifyInstance): Promise<void> {
       await DialogSessionModel.updateOne({ _id: session._id }, { $set: { status: 'running' } });
     }
 
-    const result = await executeDialogTurn(new Types.ObjectId(params.id));
+    const result = await executeDialogTurn(new Types.ObjectId(params.id), { forcePeerCheck: true });
     if (session.runMode === 'auto' && !result.done) {
       void continueDialogSession(params.id).catch(() => {});
     }

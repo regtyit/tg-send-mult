@@ -26,14 +26,42 @@ export function inboundSyncBatchPerTick(): number {
   return config.INBOUND_SYNC_BATCH_PER_TICK;
 }
 
-/** Min seconds between peer inbox polls while a dialog waits for a reply. */
+/** Min seconds between peer inbox polls while a dialog waits for a reply (floor). */
 export function dialogPeerSyncIntervalSec(): number {
   return config.DIALOG_PEER_SYNC_INTERVAL_SEC;
+}
+
+/** Seconds between peer-reply Telegram polls after send (5 → 30 → 60 → 180). */
+export function dialogPeerCheckDelaysSec(): number[] {
+  return config.DIALOG_PEER_CHECK_DELAYS_SEC;
+}
+
+export function peerCheckDelaySec(attempt: number): number {
+  const delays = dialogPeerCheckDelaysSec();
+  const idx = Math.min(Math.max(0, attempt), delays.length - 1);
+  return delays[idx] ?? delays[delays.length - 1] ?? 180;
+}
+
+export function nextPeerCheckAt(attempt: number, fromMs: number = Date.now()): Date {
+  return new Date(fromMs + peerCheckDelaySec(attempt) * 1000);
 }
 
 /** Delay before re-checking a session in waiting_peer (queue / poll). */
 export function dialogWaitPollMs(): number {
   return config.DIALOG_WAIT_POLL_MS;
+}
+
+/**
+ * Whether a waiting dialog session may poll Telegram for a peer reply.
+ * Uses `nextRunAt` from progressive backoff; manual step passes `force: true`.
+ */
+export function sessionDueForPeerCheck(
+  session: DialogSessionDoc,
+  opts?: { force?: boolean },
+): boolean {
+  if (opts?.force) return true;
+  if (session.nextRunAt && session.nextRunAt.getTime() > Date.now()) return false;
+  return sessionDueForPeerSync(session, opts);
 }
 
 /** Stagger between dialog sessions in one batch tick. */
@@ -76,6 +104,7 @@ export function sessionDueForPeerSync(
   opts?: { force?: boolean; intervalSec?: number },
 ): boolean {
   if (opts?.force) return true;
+  if (session.nextRunAt && session.nextRunAt.getTime() > Date.now()) return false;
   const intervalMs = (opts?.intervalSec ?? dialogPeerSyncIntervalSec()) * 1000;
   const last = session.lastPeerSyncAt;
   if (!last) return true;

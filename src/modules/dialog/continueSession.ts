@@ -2,7 +2,7 @@ import { Types } from 'mongoose';
 import { DialogSessionModel } from '../../db/models';
 import { executeDialogTurn } from './executeTurn';
 import { enqueueDialogTurn } from '../../queue/queues';
-import { dialogWaitPollMs } from '../sync/timing';
+import { dialogWaitPollMs, peerCheckDelaySec } from '../sync/timing';
 
 /**
  * Run one dialog turn and schedule the next auto step (queue delay or peer-wait poll).
@@ -20,7 +20,10 @@ export async function continueDialogSession(sessionId: Types.ObjectId | string):
   if (!updated || updated.runMode !== 'auto') return;
 
   if (updated.status === 'waiting_peer') {
-    await enqueueDialogTurn(id.toString(), dialogWaitPollMs());
+    const delayMs = updated.nextRunAt
+      ? Math.max(1000, updated.nextRunAt.getTime() - Date.now())
+      : Math.max(dialogWaitPollMs(), peerCheckDelaySec(0) * 1000);
+    await enqueueDialogTurn(id.toString(), delayMs);
     return;
   }
   if (updated.status === 'running' && updated.nextRunAt) {

@@ -13,6 +13,7 @@ import type { DialogScriptDoc } from '../../db/models/DialogScript';
 import type { DialogSessionDoc } from '../../db/models/DialogSession';
 import { recordWarmingScriptDayForSession } from '../accounts/warming';
 import { sendText } from '../messaging/send';
+import { nextPeerCheckAt, peerCheckDelaySec, sessionDueForPeerCheck } from '../sync/timing';
 import { pickDelayMs } from './delay';
 import { findPeerTriggerInbound } from './checkTrigger';
 import { planTurnForSession, totalTurnsForScript } from './planTurn';
@@ -25,11 +26,34 @@ import {
 import { setTypingForPeer } from './setTyping';
 import { syncPeerInboxForAccount, type SyncPeerInboxResult } from './syncPeerInbox';
 
+export interface ExecuteTurnOptions {
+  /** Manual Step / CLI: poll Telegram even if backoff has not elapsed. */
+  forcePeerCheck?: boolean;
+}
+
 export interface ExecuteTurnResult {
   done: boolean;
   turnIndex: number;
   waiting?: boolean;
   error?: string;
+}
+
+async function scheduleWaitingPeer(
+  session: DialogSessionDoc,
+  attempt: number,
+): Promise<void> {
+  const at = nextPeerCheckAt(attempt);
+  await DialogSessionModel.updateOne(
+    { _id: session._id },
+    {
+      $set: {
+        status: 'waiting_peer',
+        nextRunAt: at,
+        peerCheckAttempt: attempt,
+        lastError: '',
+      },
+    },
+  );
 }
 
 function peerSyncMarkedRead(result: SyncPeerInboxResult): Date | null {
@@ -75,6 +99,7 @@ async function ensurePeerTrigger(
   peerAccount: AccountDoc | null,
   peerContact: ContactDoc | null,
   trigger: string,
+  opts: { forcePeerCheck?: boolean } = {},
 ): Promise<boolean> {
   const since = await triggerSince(session, session._id);
   let match = await findPeerTriggerInbound(
@@ -86,7 +111,7 @@ async function ensurePeerTrigger(
     since,
   );
 
-  if (!match.matched) {
+  if (!match.matched && sessionDueForPeerCheck(session, { force: opts.forcePeerCheck })) {
     const proxy = accountA.proxyId ? await ProxyModel.findById(accountA.proxyId) : null;
     const peerFilter =
       session.peerType === 'contact' && peerContact
@@ -103,7 +128,7 @@ async function ensurePeerTrigger(
         markRead: true,
         dialogSessionId: session._id,
         sinceEpochSec: since ? Math.max(0, Math.floor(since.getTime() / 1000) - 30) : 0,
-        force: true,
+        force: opts.forcePeerCheck,
       },
       session,
     );
@@ -173,6 +198,7 @@ async function scheduleSessionAfterTurn(
 
   if (needsPeerWait) {
     nextStatus = 'waiting_peer';
+    nextRunAt = nextPeerCheckAt(0);
   } else if (session.runMode === 'auto' && nextPlanned) {
     const delayMs = pickDelayMs(nextPlanned.delaySecMin, nextPlanned.delaySecMax);
     nextRunAt = new Date(Date.now() + delayMs);
@@ -185,6 +211,7 @@ async function scheduleSessionAfterTurn(
         currentTurn: nextTurn,
         status: nextStatus,
         nextRunAt,
+        peerCheckAttempt: 0,
         lastError: '',
       },
     },
@@ -193,7 +220,10 @@ async function scheduleSessionAfterTurn(
   return { done: false, waiting: needsPeerWait };
 }
 
-export async function executeDialogTurn(sessionId: Types.ObjectId): Promise<ExecuteTurnResult> {
+export async function executeDialogTurn(
+  sessionId: Types.ObjectId,
+  opts: ExecuteTurnOptions = {},
+): Promise<ExecuteTurnResult> {
   const ctx = await loadSessionContext(sessionId);
   if (!ctx?.session || !ctx.script) {
     return { done: true, turnIndex: -1, error: 'Session or script not found' };
@@ -275,20 +305,17 @@ export async function executeDialogTurn(sessionId: Types.ObjectId): Promise<Exec
       peerAccount,
       peerContact,
       planned.waitForText,
+      { forcePeerCheck: opts.forcePeerCheck },
     );
     if (!ready) {
-      await DialogSessionModel.updateOne(
-        { _id: session._id },
-        {
-          $set: {
-            status: 'waiting_peer',
-            nextRunAt: null,
-            lastError: '',
-          },
-        },
-      );
+      const attempt = Math.max(0, Number(session.peerCheckAttempt ?? 0));
+      await scheduleWaitingPeer(session, attempt + 1);
       return { done: false, turnIndex: planned.turnIndex, waiting: true };
     }
+    await DialogSessionModel.updateOne(
+      { _id: session._id },
+      { $set: { peerCheckAttempt: 0, nextRunAt: null } },
+    );
     if (session.status === 'waiting_peer') {
       await DialogSessionModel.updateOne({ _id: session._id }, { $set: { status: 'running' } });
     }
@@ -322,7 +349,7 @@ export async function executeDialogTurn(sessionId: Types.ObjectId): Promise<Exec
           ...peerFilter,
           markRead: true,
           dialogSessionId: session._id,
-          force: true,
+          force: opts.forcePeerCheck,
         },
         session,
       );
@@ -334,23 +361,6 @@ export async function executeDialogTurn(sessionId: Types.ObjectId): Promise<Exec
       if (planned.text) {
         await sendText(sender, proxy, planned.peer, planned.text);
       }
-      const peerFilter =
-        session.peerType === 'account' && peerAccount
-          ? peerFilterFromAccount(peerAccount)
-          : session.peerType === 'contact' && peerContact
-            ? peerFilterFromContact(peerContact)
-            : {};
-      await syncPeerInboxForAccount(
-        sender,
-        proxy,
-        {
-          ...peerFilter,
-          markRead: true,
-          dialogSessionId: session._id,
-          force: true,
-        },
-        session,
-      );
     }
   } catch (err) {
     turnError = err instanceof Error ? err.message : String(err);

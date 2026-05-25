@@ -91,6 +91,10 @@ export const envSchema = z
      * Set to 0 to disable.
      */
     TG_BRIDGE_TIMEOUT_MS: z.coerce.number().int().nonnegative().default(45_000),
+    /** list_incoming for one peer (dialog wait / post-send). */
+    TG_BRIDGE_LIST_INCOMING_PEER_TIMEOUT_MS: z.coerce.number().int().nonnegative().default(20_000),
+    /** list_incoming full inbox (scheduler). */
+    TG_BRIDGE_LIST_INCOMING_TIMEOUT_MS: z.coerce.number().int().nonnegative().default(35_000),
 
     /**
      * Buffer (in seconds) added to FLOOD_WAIT before re-trying. Helps avoid
@@ -108,16 +112,32 @@ export const envSchema = z
     /** Inbound: max age of messages to fetch on first sync (seconds). */
     INBOUND_SYNC_LOOKBACK_SEC: z.coerce.number().int().positive().default(86_400),
     /** Inbound: min interval between automatic syncs per sender account (seconds). */
-    INBOUND_SYNC_INTERVAL_SEC: z.coerce.number().int().positive().default(90),
+    INBOUND_SYNC_INTERVAL_SEC: z.coerce.number().int().positive().default(180),
     /** Inbound: delay between accounts in one scheduler tick (milliseconds). */
     INBOUND_SYNC_STAGGER_MS: z.coerce.number().int().nonnegative().default(2_000),
     /** Inbound: how many accounts to sync per scheduler minute tick. */
-    INBOUND_SYNC_BATCH_PER_TICK: z.coerce.number().int().positive().default(8),
+    INBOUND_SYNC_BATCH_PER_TICK: z.coerce.number().int().positive().default(4),
 
     /** Dialog: min interval between peer inbox polls per session (seconds). */
-    DIALOG_PEER_SYNC_INTERVAL_SEC: z.coerce.number().int().positive().default(15),
-    /** Dialog: how long to wait before re-polling when waiting_peer (milliseconds). */
-    DIALOG_WAIT_POLL_MS: z.coerce.number().int().positive().default(8_000),
+    DIALOG_PEER_SYNC_INTERVAL_SEC: z.coerce.number().int().positive().default(180),
+    /**
+     * Seconds to wait before each peer-reply Telegram poll while waiting_peer
+     * (attempt 0 = first check after send).
+     */
+    DIALOG_PEER_CHECK_DELAYS_SEC: z
+      .preprocess(
+        (v) => {
+          if (Array.isArray(v)) return v.map((x) => Number(x));
+          if (typeof v === 'string' && v.trim()) {
+            return v.split(',').map((s) => Number(s.trim()));
+          }
+          return v;
+        },
+        z.array(z.coerce.number().int().positive()).min(1),
+      )
+      .default([5, 30, 60, 180]),
+    /** Dialog: fallback queue delay when nextRunAt is missing (milliseconds). */
+    DIALOG_WAIT_POLL_MS: z.coerce.number().int().positive().default(5_000),
     /** Dialog: delay between sessions in one batch tick (milliseconds). */
     DIALOG_SESSION_STAGGER_MS: z.coerce.number().int().nonnegative().default(400),
   })

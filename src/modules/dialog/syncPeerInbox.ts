@@ -3,7 +3,7 @@ import type { AccountDoc } from '../../db/models/Account';
 import type { DialogSessionDoc } from '../../db/models/DialogSession';
 import type { ProxyDoc } from '../../db/models/Proxy';
 import { DialogSessionModel, InboundReplyModel } from '../../db/models';
-import { sessionDueForPeerSync } from '../sync/timing';
+import { sessionDueForPeerCheck } from '../sync/timing';
 import {
   MissingTelegramApiCredentialsError,
   telegramApiCredentialsForAccount,
@@ -11,6 +11,7 @@ import {
 import { deviceProfileFromAccount } from '../../telegram/deviceProfile';
 import { TgDomainError } from '../../telegram/errors';
 import { proxyDocToTelethonPayload } from '../../telegram/proxyPayload';
+import { listIncomingPeerTimeoutMs } from '../../telegram/bridgeTimeouts';
 import { runTelethonBridgeAsync, telethonCommon, unwrapTelethonBridge } from '../../telegram/pythonBridge';
 import { decryptSessionStringForAccount } from '../../telegram/sessionString';
 import { markInboundRepliesReadInDb } from '../messaging/markInboundReadInDb';
@@ -62,7 +63,7 @@ export async function syncPeerInboxForAccount(
   options: SyncPeerInboxOptions,
   session?: DialogSessionDoc | null,
 ): Promise<SyncPeerInboxResult> {
-  if (session && !sessionDueForPeerSync(session, { force: options.force })) {
+  if (session && !sessionDueForPeerCheck(session, { force: options.force })) {
     return { skipped: true, reason: 'interval' };
   }
 
@@ -73,21 +74,29 @@ export async function syncPeerInboxForAccount(
     lookbackSec: options.lookbackSec,
   });
 
+  const peerFiltered = Boolean(
+    options.peerUserId?.trim() || options.peerUsername?.trim() || options.peerPhone?.trim(),
+  );
+  const timeoutMs = listIncomingPeerTimeoutMs();
+
   const result = unwrapTelethonBridge<BridgeIncomingResult>(
-    await runTelethonBridgeAsync({
-      action: 'list_incoming',
-      session: decryptSessionStringForAccount(account),
-      sinceEpochSec,
-      limit: 50,
-      perDialogLimit: 30,
-      dialogLimit: 200,
-      includeOutgoing: true,
-      markRead: options.markRead === true,
-      peerUserId: options.peerUserId || undefined,
-      peerUsername: options.peerUsername || undefined,
-      peerPhone: options.peerPhone || undefined,
-      ...telethonCommon(creds, deviceProfileFromAccount(account), proxyPayload),
-    }),
+    await runTelethonBridgeAsync(
+      {
+        action: 'list_incoming',
+        session: decryptSessionStringForAccount(account),
+        sinceEpochSec,
+        limit: peerFiltered ? 30 : 50,
+        perDialogLimit: peerFiltered ? 20 : 15,
+        dialogLimit: peerFiltered ? 15 : 40,
+        includeOutgoing: true,
+        markRead: options.markRead === true,
+        peerUserId: options.peerUserId || undefined,
+        peerUsername: options.peerUsername || undefined,
+        peerPhone: options.peerPhone || undefined,
+        ...telethonCommon(creds, deviceProfileFromAccount(account), proxyPayload),
+      },
+      { timeoutMs: timeoutMs || undefined },
+    ),
   );
 
   const { items } = result;

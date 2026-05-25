@@ -7,6 +7,7 @@ import {
 import { deviceProfileFromAccount } from '../../telegram/deviceProfile';
 import { TgDomainError } from '../../telegram/errors';
 import { proxyDocToTelethonPayload } from '../../telegram/proxyPayload';
+import { listIncomingFullTimeoutMs } from '../../telegram/bridgeTimeouts';
 import { runTelethonBridgeAsync, telethonCommon, unwrapTelethonBridge } from '../../telegram/pythonBridge';
 import { decryptSessionStringForAccount } from '../../telegram/sessionString';
 import { markInboundRepliesReadInDb } from './markInboundReadInDb';
@@ -120,18 +121,22 @@ export async function syncInboundRepliesForAccount(
     lookbackSec: options.lookbackSec,
   });
 
+  const timeoutMs = listIncomingFullTimeoutMs();
   const result = unwrapTelethonBridge<BridgeIncomingResult>(
-    await runTelethonBridgeAsync({
-      action: 'list_incoming',
-      session: decryptSessionStringForAccount(account),
-      sinceEpochSec,
-      limit: 200,
-      perDialogLimit: 20,
-      dialogLimit: 200,
-      includeOutgoing: true,
-      markRead: options.markRead === true,
-      ...telethonCommon(creds, deviceProfileFromAccount(account), proxyPayload),
-    }),
+    await runTelethonBridgeAsync(
+      {
+        action: 'list_incoming',
+        session: decryptSessionStringForAccount(account),
+        sinceEpochSec,
+        limit: 120,
+        perDialogLimit: 8,
+        dialogLimit: 40,
+        includeOutgoing: true,
+        markRead: options.markRead === true,
+        ...telethonCommon(creds, deviceProfileFromAccount(account), proxyPayload),
+      },
+      { timeoutMs: timeoutMs || undefined },
+    ),
   );
   const { items } = result;
   const scanned = result.dialogsScanned ?? 0;

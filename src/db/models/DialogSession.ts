@@ -30,6 +30,8 @@ const dialogSessionSchema = new Schema(
     waitCursorAt: { type: Date, default: null },
     /** Throttle Telegram inbox polls while waiting for a peer reply. */
     lastPeerSyncAt: { type: Date, default: null },
+    /** Index into DIALOG_PEER_CHECK_DELAYS_SEC while waiting_peer. */
+    peerCheckAttempt: { type: Number, default: 0 },
     nextRunAt: { type: Date, default: null, index: true },
     /** Prevents duplicate turn execution across scheduler/worker instances. */
     processingLockUntil: { type: Date, default: null, index: true },
