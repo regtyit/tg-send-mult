@@ -750,10 +750,24 @@ async function startSession(id: string): Promise<void> {
 
 async function stepSession(id: string): Promise<void> {
   try {
-    await apiFetch(`/api/dialog-sessions/${id}/step`, { method: 'POST' });
+    const res = await apiFetch<{
+      ok: boolean;
+      result?: { done?: boolean; waiting?: boolean; error?: string; turnIndex?: number };
+      session?: { status?: string; lastError?: string };
+    }>(`/api/dialog-sessions/${id}/step`, { method: 'POST' });
     selectSession(id);
     await loadTranscript();
     await loadAll();
+    const r = res.result;
+    if (r?.error) {
+      toast.error(r.error);
+    } else if (r?.waiting) {
+      toast.info('Waiting for peer reply (syncing inbox). Click Step again or use Auto mode.');
+    } else if (r?.done) {
+      toast.success('Dialog completed.');
+    } else {
+      toast.success(`Turn ${(r?.turnIndex ?? 0) + 1} done.`);
+    }
   } catch (e) {
     toast.error(errorText(e));
   }

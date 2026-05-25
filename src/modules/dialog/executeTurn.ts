@@ -9,6 +9,7 @@ import {
 } from '../../db/models';
 import type { AccountDoc } from '../../db/models/Account';
 import type { ContactDoc } from '../../db/models/Contact';
+import type { DialogScriptDoc } from '../../db/models/DialogScript';
 import type { DialogSessionDoc } from '../../db/models/DialogSession';
 import { recordWarmingScriptDayForSession } from '../accounts/warming';
 import { sendText } from '../messaging/send';
@@ -102,6 +103,7 @@ async function ensurePeerTrigger(
         markRead: true,
         dialogSessionId: session._id,
         sinceEpochSec: since ? Math.max(0, Math.floor(since.getTime() / 1000) - 30) : 0,
+        force: true,
       },
       session,
     );
@@ -122,6 +124,73 @@ async function ensurePeerTrigger(
   }
 
   return match.matched;
+}
+
+async function scheduleSessionAfterTurn(
+  session: DialogSessionDoc,
+  script: DialogScriptDoc,
+  accountA: AccountDoc,
+  peerAccount: AccountDoc | null,
+  peerContact: ContactDoc | null,
+  peerStrA: string,
+  peerStrB: string,
+  nextTurn: number,
+  total: number,
+): Promise<{ done: boolean; waiting: boolean }> {
+  if (nextTurn >= total) {
+    await DialogSessionModel.updateOne(
+      { _id: session._id },
+      {
+        $set: {
+          currentTurn: nextTurn,
+          status: 'completed',
+          completedAt: new Date(),
+          nextRunAt: null,
+          lastError: '',
+        },
+      },
+    );
+    await recordWarmingScriptDayForSession(session);
+    return { done: true, waiting: false };
+  }
+
+  const snap = await DialogSessionModel.findById(session._id).lean();
+  const nextPlanned = snap
+    ? await planTurnForSession(
+        { ...snap, currentTurn: nextTurn } as DialogSessionDoc,
+        script,
+        accountA,
+        peerAccount,
+        peerContact,
+        peerStrA,
+        peerStrB,
+      )
+    : null;
+
+  const needsPeerWait = Boolean(nextPlanned?.waitForText?.trim());
+  let nextRunAt: Date | null = null;
+  let nextStatus: 'running' | 'waiting_peer' = 'running';
+
+  if (needsPeerWait) {
+    nextStatus = 'waiting_peer';
+  } else if (session.runMode === 'auto' && nextPlanned) {
+    const delayMs = pickDelayMs(nextPlanned.delaySecMin, nextPlanned.delaySecMax);
+    nextRunAt = new Date(Date.now() + delayMs);
+  }
+
+  await DialogSessionModel.updateOne(
+    { _id: session._id },
+    {
+      $set: {
+        currentTurn: nextTurn,
+        status: nextStatus,
+        nextRunAt,
+        lastError: '',
+      },
+    },
+  );
+
+  return { done: false, waiting: needsPeerWait };
 }
 
 export async function executeDialogTurn(sessionId: Types.ObjectId): Promise<ExecuteTurnResult> {
@@ -180,7 +249,23 @@ export async function executeDialogTurn(sessionId: Types.ObjectId): Promise<Exec
   }
 
   if (await DialogTurnModel.exists({ sessionId: session._id, turnIndex: planned.turnIndex })) {
-    return { done: false, turnIndex: planned.turnIndex };
+    const nextTurn = planned.turnIndex + 1;
+    const advanced = await scheduleSessionAfterTurn(
+      session,
+      script,
+      accountA,
+      peerAccount,
+      peerContact,
+      peerStrA,
+      peerStrB,
+      nextTurn,
+      total,
+    );
+    return {
+      done: advanced.done,
+      turnIndex: planned.turnIndex,
+      waiting: advanced.waiting,
+    };
   }
 
   if (planned.waitForText) {
@@ -299,58 +384,16 @@ export async function executeDialogTurn(sessionId: Types.ObjectId): Promise<Exec
   });
 
   const nextTurn = planned.turnIndex + 1;
-  const done = nextTurn >= total;
-
-  if (done) {
-    await DialogSessionModel.updateOne(
-      { _id: session._id },
-      {
-        $set: {
-          currentTurn: nextTurn,
-          status: 'completed',
-          completedAt: new Date(),
-          nextRunAt: null,
-          lastError: '',
-        },
-      },
-    );
-    await recordWarmingScriptDayForSession(session);
-    return { done: true, turnIndex: planned.turnIndex };
-  }
-
-  const nextSession = { ...session.toObject(), currentTurn: nextTurn } as DialogSessionDoc;
-  const nextPlanned = await planTurnForSession(
-    nextSession,
+  const advanced = await scheduleSessionAfterTurn(
+    session,
     script,
     accountA,
     peerAccount,
     peerContact,
     peerStrA,
     peerStrB,
+    nextTurn,
+    total,
   );
-
-  const needsPeerWait = Boolean(nextPlanned?.waitForText?.trim());
-  let nextRunAt: Date | null = null;
-  let nextStatus: 'running' | 'waiting_peer' = 'running';
-
-  if (needsPeerWait) {
-    nextStatus = 'waiting_peer';
-  } else if (session.runMode === 'auto' && nextPlanned) {
-    const delayMs = pickDelayMs(nextPlanned.delaySecMin, nextPlanned.delaySecMax);
-    nextRunAt = new Date(Date.now() + delayMs);
-  }
-
-  await DialogSessionModel.updateOne(
-    { _id: session._id },
-    {
-      $set: {
-        currentTurn: nextTurn,
-        status: nextStatus,
-        nextRunAt,
-        lastError: '',
-      },
-    },
-  );
-
-  return { done: false, turnIndex: planned.turnIndex, waiting: needsPeerWait };
+  return { done: advanced.done, turnIndex: planned.turnIndex, waiting: advanced.waiting };
 }

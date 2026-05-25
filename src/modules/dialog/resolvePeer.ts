@@ -1,5 +1,6 @@
 import type { AccountDoc } from '../../db/models/Account';
 import type { ContactDoc } from '../../db/models/Contact';
+import { normalizePhoneDigits, normalizePhoneE164 } from './normalizePhone';
 
 /**
  * Telethon peer string for send_message / set_typing / list_incoming filters.
@@ -7,15 +8,15 @@ import type { ContactDoc } from '../../db/models/Contact';
 export function peerStringFromAccount(account: AccountDoc): string {
   const user = String(account.telegramUsername || '').trim();
   if (user) return user.startsWith('@') ? user : `@${user}`;
-  const phone = String(account.phone || '').trim();
-  if (phone) return phone.startsWith('+') ? phone : `+${phone.replace(/\D/g, '')}`;
+  const phone = normalizePhoneE164(String(account.phone || ''));
+  if (phone) return phone;
   return '';
 }
 
 export function peerStringFromContact(contact: ContactDoc): string {
   const user = String(contact.username || '').trim();
   if (user) return user.startsWith('@') ? user : `@${user}`;
-  const phone = String(contact.phoneE164 || '').trim();
+  const phone = normalizePhoneE164(String(contact.phoneE164 || ''));
   if (phone) return phone;
   const uid = String(contact.userId || '').trim();
   if (uid) return uid;
@@ -28,7 +29,7 @@ export function peerFilterFromAccount(account: AccountDoc): {
   peerPhone?: string;
 } {
   const user = String(account.telegramUsername || '').trim().replace(/^@+/, '');
-  const phone = String(account.phone || '').trim();
+  const phone = normalizePhoneDigits(String(account.phone || ''));
   return {
     peerUsername: user || undefined,
     peerPhone: phone || undefined,
@@ -42,7 +43,7 @@ export function peerFilterFromContact(contact: ContactDoc): {
 } {
   const uid = String(contact.userId || '').trim();
   const user = String(contact.username || '').trim().replace(/^@+/, '');
-  const phone = String(contact.phoneE164 || '').trim();
+  const phone = normalizePhoneDigits(String(contact.phoneE164 || ''));
   return {
     peerUserId: uid || undefined,
     peerUsername: user || undefined,

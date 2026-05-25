@@ -65,9 +65,12 @@ export async function findPeerTriggerInbound(
   };
 
   const peerOr = peerClauses(session, peerAccount, peerContact);
+  if (!peerOr.length) {
+    return { matched: false, messageAt: null };
+  }
   if (peerOr.length === 1) {
     Object.assign(filter, peerOr[0]);
-  } else if (peerOr.length > 1) {
+  } else {
     filter.$or = peerOr;
   }
 

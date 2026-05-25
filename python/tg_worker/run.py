@@ -359,11 +359,15 @@ def _normalize_username(raw: str) -> str:
     return str(raw or "").strip().lstrip("@").lower()
 
 
+def _phone_digits(raw: str) -> str:
+    return re.sub(r"\D", "", str(raw or ""))
+
+
 def _peer_matches_filter(entity: Any, req: dict[str, Any]) -> bool:
     """When peer* filters are set, only scan that dialog."""
     want_uid = str(req.get("peerUserId") or "").strip()
     want_user = _normalize_username(str(req.get("peerUsername") or ""))
-    want_phone = re.sub(r"[^\d+]", "", str(req.get("peerPhone") or ""))
+    want_phone = _phone_digits(str(req.get("peerPhone") or ""))
     if not want_uid and not want_user and not want_phone:
         return True
     if not isinstance(entity, User):
@@ -372,7 +376,7 @@ def _peer_matches_filter(entity: Any, req: dict[str, Any]) -> bool:
         return True
     if want_user and _normalize_username(str(getattr(entity, "username", "") or "")) == want_user:
         return True
-    ent_phone = re.sub(r"[^\d+]", "", str(getattr(entity, "phone", "") or ""))
+    ent_phone = _phone_digits(str(getattr(entity, "phone", "") or ""))
     if want_phone and ent_phone and ent_phone == want_phone:
         return True
     return False
@@ -431,7 +435,7 @@ async def handle_list_incoming(req: dict[str, Any]) -> dict[str, Any]:
     peer_filter_active = bool(
         str(req.get("peerUserId") or "").strip()
         or _normalize_username(str(req.get("peerUsername") or ""))
-        or re.sub(r"[^\d+]", "", str(req.get("peerPhone") or ""))
+        or _phone_digits(str(req.get("peerPhone") or ""))
     )
     out: list[dict[str, Any]] = []
     dialogs_scanned = 0

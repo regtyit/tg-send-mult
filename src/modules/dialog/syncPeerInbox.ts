@@ -14,6 +14,7 @@ import { proxyDocToTelethonPayload } from '../../telegram/proxyPayload';
 import { runTelethonBridgeAsync, telethonCommon, unwrapTelethonBridge } from '../../telegram/pythonBridge';
 import { decryptSessionStringForAccount } from '../../telegram/sessionString';
 import { markInboundRepliesReadInDb } from '../messaging/markInboundReadInDb';
+import { normalizePhoneDigits } from './normalizePhone';
 import { sinceEpochForInboundSync } from '../sync/timing';
 
 interface BridgeIncomingItem {
@@ -97,12 +98,16 @@ export async function syncPeerInboxForAccount(
 
   let saved = 0;
   for (const x of items) {
-    if (x.messageId <= 0 || !String(x.peerUserId || '').trim()) continue;
+    if (x.messageId <= 0) continue;
+    const peerUserId =
+      String(x.peerUserId || '').trim() ||
+      (normalizePhoneDigits(x.peerPhone) ? `phone:${normalizePhoneDigits(x.peerPhone)}` : '');
+    if (!peerUserId) continue;
     if (!String(x.text || '').trim() && x.direction === 'outgoing') continue;
     const direction = x.direction === 'outgoing' ? 'outgoing' : 'incoming';
     const doc = {
       accountId: account._id,
-      peerUserId: x.peerUserId,
+      peerUserId,
       telegramMessageId: x.messageId,
       peerUsername: x.peerUsername || '',
       peerPhone: x.peerPhone || '',
