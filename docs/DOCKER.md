@@ -8,10 +8,11 @@ Run the full stack (MongoDB, **Valkey**, API, worker, scheduler) on **localhost*
 
 | Command | Purpose |
 |---------|---------|
+| **`npm run docker:start`** | **One command:** doctor → build → up → health check → print URLs |
 | `npm run docker:doctor` | Docker daemon, buildx, `docker` group |
 | `npm run docker:sync-data` | Copy host `dump.rdb` / hint for Mongo paths |
-| `npm run docker:build` | Build app image |
-| `npm run docker:up` | Start stack detached |
+| `npm run docker:build` | Build app image only |
+| `npm run docker:up` | Start stack (no rebuild) |
 | `npm run docker:ps` | Container status |
 | `npm run docker:logs` | Follow logs |
 | `npm run docker:down` | Stop and remove containers |
@@ -78,13 +79,26 @@ Env names stay `REDIS_*` for compatibility; point them at Valkey on the host the
 
 ## Commands
 
+**First time / after code changes:**
+
 ```bash
-npm run docker:sync-data  # optional: refresh Valkey dump.rdb from host
-npm run docker:build
-npm run docker:up
+cp .env.example .env   # if you have no .env yet; edit SESSION_KEY and passwords
+npm run docker:start   # build + start + wait until http://127.0.0.1:3048/health is OK
+```
+
+**Later (image already built):**
+
+```bash
+npm run docker:up      # restart without rebuild
 npm run docker:ps
 npm run docker:logs
 npm run docker:down
+```
+
+Optional before `docker:start` if you reuse host DB files:
+
+```bash
+npm run docker:sync-data
 ```
 
 ## Verify
@@ -118,4 +132,4 @@ Before `docker compose up`, stop native **`mongod`**, **`valkey`**, and **`npm r
 - **Mongo exits on start** — data dir permissions; see `docker compose logs mongo`.
 - **Valkey exits on start** — corrupt or incompatible `dump.rdb`; remove it and start fresh, or re-run `docker:sync-data` while Valkey on the host is stopped.
 - **Empty dashboard** — wrong `MONGO_DATA_DIR` or empty volume.
-- **Telegram actions fail** — image must include Python venv (`TG_PYTHON=/app/python/.venv/bin/python3` in Compose).
+- **Telegram actions fail** — image must include Python venv (`TG_PYTHON=/app/python/.venv/bin/python3` in Compose). Rebuild after `python/requirements.txt` changes (`TelethonFakeTLS` for `ee...` MTProxy secrets).

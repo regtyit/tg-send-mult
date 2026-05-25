@@ -95,7 +95,7 @@ flowchart LR
 
 4. **Open the dashboard:** [http://localhost:3000](http://localhost:3000) (Basic Auth from `.env`).
 
-   **Or Docker Compose** (API + worker + scheduler + Mongo + Valkey): see [docs/DOCKER.md](docs/DOCKER.md) → `npm run docker:up` → [http://127.0.0.1:3048](http://127.0.0.1:3048).
+   **Or Docker Compose** (API + worker + scheduler + Mongo + Valkey): see [docs/DOCKER.md](docs/DOCKER.md) → `npm run docker:start` → [http://127.0.0.1:3048](http://127.0.0.1:3048).
 
 5. **Add a sender** (CLI example — MTProxy required for Telegram actions):
    ```bash
@@ -239,7 +239,7 @@ npm run typecheck
 |---------|---------|
 | `npm run mongod:local` | Start local MongoDB (Artix-style config) |
 | `npm run docker:doctor` | Check Docker socket, buildx, permissions |
-| `npm run docker:up` | Full stack via Compose → [DOCKER.md](docs/DOCKER.md) |
+| `npm run docker:start` | Build + start full stack via Compose → [DOCKER.md](docs/DOCKER.md) |
 
 **Production notes:** set `NODE_ENV=production`, change `API_BASIC_USER` / `API_BASIC_PASSWORD` (≥ 12 chars), and configure `CORS_ALLOWED_ORIGINS` if the dashboard is on another origin. The app refuses to start in production with default credentials.
 

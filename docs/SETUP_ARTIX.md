@@ -33,11 +33,7 @@ npm run setup:python
 
 This creates `python/.venv` and installs `python/requirements.txt`. The Node bridge uses that interpreter automatically when `TG_PYTHON` is the default `python3` / `python`. Override with `TG_PYTHON=/full/path/to/python` in `.env` if needed.
 
-If you plan to use **FakeTLS MTProxy (`ee...` secrets)**, install the optional package into the same venv:
-
-```bash
-python/.venv/bin/pip install TelethonFakeTLS
-```
+**FakeTLS MTProxy (`ee...` secrets)** is installed automatically via `npm run setup:python` (`TelethonFakeTLS` in `python/requirements.txt`).
 
 ---
 

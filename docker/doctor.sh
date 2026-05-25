@@ -55,4 +55,4 @@ fi
 
 $ok || exit 1
 say ""
-say "Ready: npm run docker:build && npm run docker:up"
+say "Ready: npm run docker:start"

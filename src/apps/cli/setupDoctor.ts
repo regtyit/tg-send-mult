@@ -56,6 +56,21 @@ async function main(): Promise<void> {
   }
   console.log(`OK (${(pyChk.stdout ?? '').trim()})`);
 
+  process.stdout.write('  TelethonFakeTLS (ee MTProxy): ');
+  const faketlsChk = spawnSync(py, ['-c', 'import TelethonFakeTLS; print("ok")'], {
+    encoding: 'utf-8',
+  });
+  if (faketlsChk.status !== 0) {
+    console.log('MISSING');
+    console.error(
+      '    Re-run: npm run setup:python\n',
+      '    (installs TelethonFakeTLS from python/requirements.txt for ee... proxy secrets)\n',
+      faketlsChk.stderr || faketlsChk.stdout || '',
+    );
+    process.exit(1);
+  }
+  console.log('OK');
+
   process.stdout.write('  MongoDB: connecting… ');
   try {
     await mongoose.connect(cfg.MONGO_URI, { serverSelectionTimeoutMS: 8_000 });

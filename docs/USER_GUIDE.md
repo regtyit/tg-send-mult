@@ -352,11 +352,7 @@ The scheduler resets daily counters when the calendar day changes in each accoun
 
 **Country matching:** when assigning manually or automatically, proxy country should match the phone's country (derived from E.164).
 
-**FakeTLS (`ee...` secrets):** install optional package in the Python venv:
-
-```bash
-python/.venv/bin/pip install TelethonFakeTLS
-```
+**FakeTLS (`ee...` secrets):** included in `npm run setup:python` (`TelethonFakeTLS` in `python/requirements.txt`). After pulling updates, re-run `npm run setup:python` or rebuild the Docker image.
 
 | Secret prefix | Transport |
 |---------------|-----------|

@@ -84,12 +84,7 @@ npm run setup:python
 This creates `python/.venv` and installs `python/requirements.txt` (Telethon,
 cryptography, etc).
 
-If you plan to use **MTProxy with FakeTLS (`ee...` secrets)**, install the
-optional package into the venv:
-
-```bash
-python/.venv/bin/pip install TelethonFakeTLS
-```
+**MTProxy FakeTLS (`ee...` secrets)** is installed automatically via `npm run setup:python` (`TelethonFakeTLS` in `python/requirements.txt`).
 
 If your venv lives elsewhere, set `TG_PYTHON=/full/path/to/venv/bin/python` in
 `.env`.

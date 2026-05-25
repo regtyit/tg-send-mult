@@ -32,6 +32,7 @@
     "test:watch": "vitest",
     "check": "npm run typecheck && npm run lint && npm test",
     "mongod:local": "bash scripts/mongod-local.sh",
+    "docker:start": "bash docker/start.sh",
     "docker:doctor": "bash docker/doctor.sh",
     "docker:sync-data": "bash docker/sync-local-data.sh",
     "docker:build": "bash docker/ensure-data-dir.sh && bash docker/compose.sh build",

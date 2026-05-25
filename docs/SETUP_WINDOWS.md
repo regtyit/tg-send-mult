@@ -104,11 +104,7 @@ npm run setup:python
 
 This creates `python\.venv` and installs `python\requirements.txt`.
 
-For MTProxy with FakeTLS (`ee...` secrets):
-
-```powershell
-python\.venv\Scripts\pip.exe install TelethonFakeTLS
-```
+FakeTLS MTProxy (`ee...` secrets) is installed automatically via `npm run setup:python`.
 
 If `TG_PYTHON` in `.env` is left blank or set to `python` / `python3`, the
 bridge auto-detects `python\.venv\Scripts\python.exe`. Otherwise, set

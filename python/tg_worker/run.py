@@ -83,12 +83,12 @@ def _choose_mtproxy_connection_and_secret(secret_hex: str):
 
             # TelethonFakeTLS expects secret without the ee prefix.
             return TelethonFakeTLS.ConnectionTcpMTProxyFakeTLS, s[2:]
-        except Exception:
+        except Exception as imp_err:
             raise ValueError(
-                "This MTProxy secret looks like fake-TLS (ee...). Native Telethon in this build "
-                "cannot reliably use fake-TLS domain payloads. Use a dd/standard MTProxy secret "
-                "or install TelethonFakeTLS in python/.venv."
-            )
+                "This MTProxy secret looks like fake-TLS (ee...). Install TelethonFakeTLS in the "
+                "Python venv: npm run setup:python (or pip install TelethonFakeTLS in python/.venv). "
+                f"Import error: {imp_err!s}"
+            ) from imp_err
     # No dd/ee prefix: standard short secret.
     return ConnectionTcpMTProxyAbridged, s
 
