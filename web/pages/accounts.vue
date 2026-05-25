@@ -518,11 +518,12 @@ async function importTdata(): Promise<void> {
       }),
     });
     toast.success('tdata imported and verified.');
-    await load();
   } catch (e) {
     toast.error(errorText(e));
+    console.error('import tdata failed', e);
   } finally {
     importingTdata.value = false;
+    await load();
   }
 }
 
@@ -543,11 +544,12 @@ async function importJson(): Promise<void> {
       }),
     });
     toast.success('JSON account imported.');
-    await load();
   } catch (e) {
     toast.error(errorText(e));
+    console.error('import json failed', e);
   } finally {
     importingJson.value = false;
+    await load();
   }
 }
 
@@ -565,11 +567,12 @@ async function bulkImportAccounts(payload: { csv?: string }): Promise<void> {
     });
     bulkImportSummary.value = `Imported ${res.imported}, failed ${res.failed}`;
     toast.success(bulkImportSummary.value);
-    await load();
   } catch (e) {
     toast.error(errorText(e));
+    console.error('bulk import failed', e);
   } finally {
     bulkImporting.value = false;
+    await load();
   }
 }
 

@@ -32,6 +32,7 @@ import { resolveAccountSpecifiers } from '../../modules/accounts/resolveAccountS
 import { syncInboundRepliesForAccount } from '../../modules/messaging/syncInboundReplies';
 import { testProxy } from '../../modules/proxy/test';
 import { ensureContactForTestRecipient } from '../../modules/contacts/testRecipient';
+import { rollbackNewAccountOnVerifyFail } from '../../modules/auth/rollbackAccount';
 import { tryParseTelegramProxyLink } from '../../telegram/proxyPayload';
 
 const program = new Command();
@@ -141,19 +142,6 @@ async function verifyImportedAccount(
   if (!acc) throw new Error('Imported account disappeared before verification');
   const proxy = await ProxyModel.findById(proxyId);
   return connectWithSavedSession(acc, proxy);
-}
-
-async function rollbackNewAccountOnVerifyFail(
-  phone: string,
-  existedBefore: boolean,
-  importedId: Types.ObjectId | null,
-): Promise<void> {
-  if (existedBefore) return;
-  if (importedId) {
-    await AccountModel.deleteOne({ _id: importedId });
-  } else {
-    await AccountModel.deleteOne({ phone: phone.trim() });
-  }
 }
 
 program

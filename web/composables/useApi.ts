@@ -95,8 +95,8 @@ export function useBasicAuth() {
           body = await res.json();
           if (body && typeof body === 'object') {
             const obj = body as Record<string, unknown>;
-            if (typeof obj.error === 'string') message = obj.error;
-            else if (typeof obj.message === 'string') message = obj.message;
+            if (typeof obj.message === 'string' && obj.message.trim()) message = obj.message.trim();
+            else if (typeof obj.error === 'string') message = obj.error;
           }
         } else {
           const txt = await res.text();

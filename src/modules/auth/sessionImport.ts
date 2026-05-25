@@ -5,7 +5,6 @@ import { AccountModel, ProxyModel } from '../../db/models';
 import type { AccountDoc } from '../../db/models/Account';
 import { defaultDeviceProfile, type DeviceProfile } from '../../telegram/client';
 import { applyWarmingSchedule } from '../accounts/warming';
-import { applyWarmingSchedule } from '../accounts/warming';
 import { logSessionEvent } from './sessionEvents';
 import { buildGramJsStringSessionV1 } from './gramJsStringSession';
 import { connectWithSavedSession } from './connect';

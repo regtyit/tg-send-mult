@@ -38,6 +38,23 @@ export function useToast() {
  * Pages already use this pattern repeatedly, so we centralise it here.
  */
 export function errorText(e: unknown): string {
+  if (e && typeof e === 'object' && 'status' in e && 'body' in e) {
+    const api = e as { message?: string; status?: number; body?: unknown };
+    const parts: string[] = [];
+    if (typeof api.message === 'string' && api.message.trim()) parts.push(api.message.trim());
+    if (api.body && typeof api.body === 'object') {
+      const b = api.body as Record<string, unknown>;
+      if (typeof b.message === 'string' && b.message.trim()) {
+        const msg = b.message.trim();
+        if (!parts.includes(msg)) parts.push(msg);
+      }
+      if (typeof b.error === 'string' && b.error.trim()) {
+        const code = b.error.trim();
+        if (!parts.some((p) => p.includes(code))) parts.push(`[${code}]`);
+      }
+    }
+    if (parts.length) return parts.join(' — ');
+  }
   if (e instanceof Error) return e.message;
   if (typeof e === 'string') return e;
   try {

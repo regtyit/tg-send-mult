@@ -1,3 +1,4 @@
+import { logger } from '../../logger';
 import { describeSenderEligibility, formatEligibilityReasons } from '../../modules/multi/senderEligibility';
 
 /**
@@ -55,7 +56,17 @@ export function sanitizeAccount(doc: unknown): Record<string, unknown> | null {
 
 export function sanitizeAccounts(docs: unknown): Record<string, unknown>[] {
   if (!Array.isArray(docs)) return [];
-  return docs.map((d) => sanitizeAccount(d)).filter((x): x is Record<string, unknown> => x !== null);
+  const out: Record<string, unknown>[] = [];
+  for (const d of docs) {
+    try {
+      const row = sanitizeAccount(d);
+      if (row) out.push(row);
+    } catch (err) {
+      const obj = plain(d);
+      logger.warn({ err, accountId: obj?._id }, 'api: skipped account in list (sanitize failed)');
+    }
+  }
+  return out;
 }
 
 export function sanitizeProxy(doc: unknown): Record<string, unknown> | null {

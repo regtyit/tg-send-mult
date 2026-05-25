@@ -63,6 +63,8 @@ Preflight: `npm run docker:doctor`
 
 3. **App secrets** — Compose loads `.env` as-is. `SESSION_KEY` must match the key used when accounts were imported.
 
+4. **Import files** — copy tdata/JSON into `data/`, then `npm run docker:build` (`COPY data/ /app/data/`). The folder must not be empty (repo includes `data/.keep`). In imports use `/app/data/...` paths. Do not list `data` in `.dockerignore`.
+
 ### Native dev vs Docker
 
 | Variable      | Native (Valkey on host) | In Compose        |

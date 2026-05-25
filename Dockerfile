@@ -37,6 +37,9 @@ COPY python/tg_worker python/tg_worker
 RUN python3 -m venv /app/python/.venv \
   && /app/python/.venv/bin/pip install --no-cache-dir -r python/requirements.txt
 
+RUN mkdir -p /app/data
+COPY data/ /app/data/
+
 ENV NODE_ENV=production \
   TG_PYTHON=/app/python/.venv/bin/python3
 

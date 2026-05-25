@@ -17,7 +17,7 @@ web/dist
 dump.rdb
 docker/redis-data
 docker/valkey-data
-data
+# Do not add top-level "data" here — Dockerfile COPY data/ needs ./data in the build context.
 terminals
 *.md
 !README.md

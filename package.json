@@ -34,7 +34,7 @@
     "mongod:local": "bash scripts/mongod-local.sh",
     "docker:doctor": "bash docker/doctor.sh",
     "docker:sync-data": "bash docker/sync-local-data.sh",
-    "docker:build": "bash docker/compose.sh build",
+    "docker:build": "bash docker/ensure-data-dir.sh && bash docker/compose.sh build",
     "docker:up": "bash docker/compose.sh up -d",
     "docker:down": "bash docker/compose.sh down",
     "docker:logs": "bash docker/compose.sh logs -f",

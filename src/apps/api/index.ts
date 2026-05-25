@@ -34,8 +34,10 @@ import { installShutdownHandlers, onShutdown } from '../../util/shutdown';
 import { syncInboundRepliesForAccount } from '../../modules/messaging/syncInboundReplies';
 import { verifyCampaignDelivery } from '../../modules/messaging/verifyCampaign';
 import { testProxy } from '../../modules/proxy/test';
+import { registerApiErrorHandler } from './errorHandler';
 import { registerBulkRoutes } from './routes/bulk';
 import { registerDialogRoutes } from './routes/dialogs';
+import { importAccountWithRollback } from '../../modules/auth/importWithRollback';
 import {
   sanitizeAccount,
   sanitizeAccounts,
@@ -184,6 +186,7 @@ async function main() {
   await connectMongo();
 
   const app = fastify({ logger: false });
+  registerApiErrorHandler(app);
 
   /**
    * CORS policy:
@@ -455,20 +458,26 @@ async function main() {
         const body = validate(reply, accountImportTdataBody, req.body);
         if (!body) return;
         const jsonMeta = body.jsonPath ? readJsonAccountMetadata(body.jsonPath) : null;
-        const imported = await importSessionFromTdata(body.phone, body.tdataPath, {
-          proxyId: body.proxyId,
-          label: body.label || jsonMeta?.label,
-          deviceProfile: jsonMeta?.deviceProfile,
-          ...(jsonMeta?.telegramApiId && jsonMeta.telegramApiHash
-            ? { telegramApiId: jsonMeta.telegramApiId, telegramApiHash: jsonMeta.telegramApiHash }
-            : {}),
-        });
+        const imported = await importAccountWithRollback(body.phone, () =>
+          importSessionFromTdata(body.phone, body.tdataPath, {
+            proxyId: body.proxyId,
+            label: body.label || jsonMeta?.label,
+            deviceProfile: jsonMeta?.deviceProfile,
+            ...(jsonMeta?.telegramApiId && jsonMeta.telegramApiHash
+              ? { telegramApiId: jsonMeta.telegramApiId, telegramApiHash: jsonMeta.telegramApiHash }
+              : {}),
+          }),
+        );
         if (body.role) {
           await AccountModel.findByIdAndUpdate(imported._id, { $set: { role: body.role } });
           imported.role = body.role;
         }
         if (imported.role === 'test_recipient') {
-          await ensureContactForTestRecipient(imported);
+          try {
+            await ensureContactForTestRecipient(imported);
+          } catch (err) {
+            logger.warn({ err, accountId: imported._id }, 'api: test_recipient contact ensure failed');
+          }
         }
         return sanitizeAccount(imported);
       });
@@ -476,17 +485,31 @@ async function main() {
       r.post('/accounts/import-json', async (req, reply) => {
         const body = validate(reply, accountImportJsonBody, req.body);
         if (!body) return;
-        const imported = await importAccountFromJsonFile(body.jsonPath, {
-          phone: body.phone,
-          proxyId: body.proxyId,
-          label: body.label,
-        });
+        const meta = readJsonAccountMetadata(body.jsonPath);
+        const phone = (body.phone?.trim() || meta.phone || '').trim();
+        if (!phone) {
+          return reply.code(400).send({
+            error: 'phone_required',
+            message: 'Phone is required (form field or in JSON metadata).',
+          });
+        }
+        const imported = await importAccountWithRollback(phone, () =>
+          importAccountFromJsonFile(body.jsonPath, {
+            phone: body.phone,
+            proxyId: body.proxyId,
+            label: body.label,
+          }),
+        );
         if (body.role) {
           await AccountModel.findByIdAndUpdate(imported._id, { $set: { role: body.role } });
           imported.role = body.role;
         }
         if (imported.role === 'test_recipient') {
-          await ensureContactForTestRecipient(imported);
+          try {
+            await ensureContactForTestRecipient(imported);
+          } catch (err) {
+            logger.warn({ err, accountId: imported._id }, 'api: test_recipient contact ensure failed');
+          }
         }
         return sanitizeAccount(imported);
       });
