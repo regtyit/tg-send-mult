@@ -90,6 +90,25 @@ function phoneCountryIso2(phone: string): string | null {
   }
 }
 
+/** `request.url` path segment only (no query string). */
+function requestPathname(url: string): string {
+  const q = url.indexOf('?');
+  return q === -1 ? url : url.slice(0, q);
+}
+
+/**
+ * HTTP Basic is only for programmatic / sensitive routes. The SPA and static
+ * assets are served without it — the browser never sends `Authorization` on
+ * full page loads; credentials live in localStorage and are sent via `fetch`
+ * from the client (`useBasicAuth` / `apiFetch`).
+ */
+function requiresHttpBasicAuth(pathname: string): boolean {
+  if (pathname === '/metrics') return true;
+  if (pathname === '/api' || pathname.startsWith('/api/')) return true;
+  if (pathname === '/admin' || pathname.startsWith('/admin/')) return true;
+  return false;
+}
+
 async function ensureProxyNotUsedByAnotherAccount(
   proxyId: string,
   accountId: string,
@@ -225,7 +244,11 @@ async function main() {
   });
 
   app.addHook('onRequest', (request, reply, done) => {
-    if (request.url === '/health' || request.url.startsWith('/health?')) {
+    const pathname = requestPathname(request.url);
+    if (pathname === '/health' || pathname.startsWith('/health/')) {
+      return done();
+    }
+    if (!requiresHttpBasicAuth(pathname)) {
       return done();
     }
     app.basicAuth(request, reply, done);

@@ -2,6 +2,15 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { logger } from '../../logger';
 import { TgDomainError } from '../../telegram/errors';
 
+/** `@fastify/error` / plugin errors often carry an explicit HTTP status. */
+function statusCodeFromError(err: unknown): number | null {
+  if (err && typeof err === 'object' && 'statusCode' in err) {
+    const sc = (err as { statusCode: unknown }).statusCode;
+    if (typeof sc === 'number' && sc >= 400 && sc < 600) return sc;
+  }
+  return null;
+}
+
 function statusForError(err: unknown): number {
   if (err instanceof TgDomainError) {
     if (err.kind === 'auth_invalid' || err.kind === 'phone_banned' || err.kind === 'phone_invalid') {
@@ -20,6 +29,8 @@ function statusForError(err: unknown): number {
     }
     return 502;
   }
+  const pluginStatus = statusCodeFromError(err);
+  if (pluginStatus !== null) return pluginStatus;
   if (err instanceof Error) {
     const msg = err.message.toLowerCase();
     if (msg.includes('not found') || msg.includes('path not found')) return 400;
@@ -39,8 +50,14 @@ function payloadForError(err: unknown, statusCode: number): Record<string, unkno
     };
   }
   if (err instanceof Error) {
+    const errorKey =
+      statusCode === 401
+        ? 'unauthorized'
+        : statusCode >= 500
+          ? 'internal_error'
+          : 'bad_request';
     return {
-      error: statusCode >= 500 ? 'internal_error' : 'bad_request',
+      error: errorKey,
       message: err.message,
     };
   }
