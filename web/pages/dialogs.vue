@@ -30,6 +30,11 @@
         <strong>A</strong> = first sender you pick · <strong>B</strong> = second sender (or contact).
         Presets are only the <em>text and timing</em>; real messages go through your senders in Telegram.
         Need <code>dev:worker</code> + <code>dev:scheduler</code> running for auto mode.
+        <br />
+        <strong>Timing:</strong> line 1 on <strong>Start</strong>; line 2, 3, … after each line’s pause
+        (see template preview). With «wait for reply», polls run at 5s → 30s → 60s → 180s until the peer
+        sends that text. Warming accounts: at most <strong>one</strong> new script per calendar day for
+        {{ warmupDays }} days.
       </div>
     </v-alert>
 
@@ -73,18 +78,20 @@
         <div class="text-subtitle-2 mb-1">{{ selectedPresetDetail.name }}</div>
         <div class="text-caption text-medium-emphasis mb-2">{{ selectedPresetDetail.description }}</div>
         <v-list density="compact" class="preset-preview-list bg-transparent">
-          <v-list-item v-for="(t, i) in selectedPresetDetail.turns" :key="i">
+          <v-list-item v-for="(row, i) in presetScheduleRows" :key="i">
             <template #prepend>
-              <v-chip size="x-small" :color="t.side === 'a' ? 'primary' : 'secondary'">
-                {{ t.side === 'a' ? 'A' : 'B' }}
+              <v-chip size="x-small" variant="outlined" class="mr-1">{{ row.line }}</v-chip>
+              <v-chip size="x-small" :color="selectedPresetDetail!.turns[i]!.side === 'a' ? 'primary' : 'secondary'">
+                {{ selectedPresetDetail!.turns[i]!.side === 'a' ? 'A' : 'B' }}
               </v-chip>
             </template>
-            <v-list-item-title class="text-body-2">{{ t.text }}</v-list-item-title>
-            <v-list-item-subtitle v-if="t.waitForText">
-              wait: «{{ t.waitForText }}» · pause {{ t.delaySecMin }}–{{ t.delaySecMax }}s
+            <v-list-item-title class="text-body-2">{{ selectedPresetDetail!.turns[i]!.text }}</v-list-item-title>
+            <v-list-item-subtitle class="text-primary">
+              {{ row.when }}
             </v-list-item-subtitle>
-            <v-list-item-subtitle v-else>
-              pause {{ t.delaySecMin }}–{{ t.delaySecMax }}s
+            <v-list-item-subtitle v-if="row.pauseBefore" class="text-caption">
+              Pause before this line: {{ row.pauseBefore }}
+              <span v-if="row.waitForText"> · wait for «{{ row.waitForText }}»</span>
             </v-list-item-subtitle>
           </v-list-item>
         </v-list>
@@ -292,6 +299,7 @@
 
 <script setup lang="ts">
 import { accountPickerLabel } from '~/utils/accountLabel';
+import { buildDialogTurnSchedule, formatNextRunAt } from '~/utils/dialogSchedule';
 import { DATA_TABLE_CLASS } from '~/utils/tableColumns';
 
 interface DialogPresetSummary {
@@ -333,11 +341,13 @@ interface DialogSession {
   status: string;
   runMode: string;
   currentTurn: number;
+  nextRunAt?: string | null;
   accountAId?: string;
   peerType?: string;
   peerAccountId?: string;
   peerContactId?: string;
   participants?: string;
+  nextStep?: string;
 }
 
 interface TranscriptLine {
@@ -455,8 +465,18 @@ const sessionHeaders = [
   { title: 'Status', key: 'status' },
   { title: 'Mode', key: 'runMode' },
   { title: 'Turn', key: 'currentTurn' },
+  { title: 'Next step', key: 'nextStep' },
   { title: '', key: 'actions', sortable: false },
 ];
+
+/** Matches server default `WARMUP_DAYS` — shown in UI hint only. */
+const warmupDays = 3;
+
+const presetScheduleRows = computed(() => {
+  const turns = selectedPresetDetail.value?.turns;
+  if (!turns?.length) return [];
+  return buildDialogTurnSchedule(turns);
+});
 
 const peerTypeItems = [
   { title: 'Another sender', value: 'account' },
@@ -489,10 +509,30 @@ function sessionParticipants(s: DialogSession): string {
   return `${aLabel} → ${cLabel}`;
 }
 
+function sessionNextStep(s: DialogSession): string {
+  if (s.runMode !== 'auto') {
+    return s.status === 'running' || s.status === 'waiting_peer' ? 'Manual Step' : '—';
+  }
+  if (s.status === 'completed' || s.status === 'failed' || s.status === 'paused' || s.status === 'draft') {
+    return '—';
+  }
+  if (s.status === 'waiting_peer') {
+    const when = formatNextRunAt(s.nextRunAt ?? null);
+    return when === '—' ? 'Waiting for peer' : `Peer check ${when}`;
+  }
+  if (s.status === 'running') {
+    const line = (s.currentTurn ?? 0) + 1;
+    const when = formatNextRunAt(s.nextRunAt ?? null);
+    return when === 'now' || when === '—' ? `Line ${line} due` : `Line ${line} ${when}`;
+  }
+  return '—';
+}
+
 const sessionsDisplay = computed(() =>
   sessions.value.map((s) => ({
     ...s,
     participants: sessionParticipants(s),
+    nextStep: sessionNextStep(s),
   })),
 );
 const contactItems = computed(() =>

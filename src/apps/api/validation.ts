@@ -50,6 +50,16 @@ export const deviceProfileSchema = z
   .partial()
   .strict();
 
+const timeHHMM = z.string().regex(/^([01]\d|2[0-3]):([0-5]\d)$/, 'Expected HH:MM');
+
+export const sendingWindowSchema = z
+  .object({
+    start: timeHHMM,
+    end: timeHHMM,
+    timezone: z.string().trim().min(1).max(80),
+  })
+  .strict();
+
 export const accountCreateBody = z
   .object({
     phone: phoneE164,
@@ -59,6 +69,9 @@ export const accountCreateBody = z
     telegramApiId: z.number().int().positive().optional(),
     telegramApiHash: z.string().trim().min(1).optional(),
     role: z.enum(['sender', 'test_recipient']).optional(),
+    /** ISO2 — apply bundled regional active hours (else derived from phone). */
+    sendingWindowRegion: z.string().trim().length(2).optional(),
+    sendingWindow: sendingWindowSchema.optional(),
   })
   .strict();
 
@@ -71,6 +84,9 @@ export const accountPatchBody = z
     telegramApiId: z.number().int().positive().nullable().optional(),
     telegramApiHash: z.string().trim().optional(),
     role: z.enum(['sender', 'test_recipient']).optional(),
+    /** Re-apply bundled regional window from ISO2 (overrides sendingWindow when set). */
+    applyRegionalWindow: z.boolean().optional(),
+    sendingWindow: sendingWindowSchema.optional(),
   })
   .strict();
 

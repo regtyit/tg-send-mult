@@ -5,6 +5,7 @@ import { AccountModel, ProxyModel } from '../../db/models';
 import type { AccountDoc } from '../../db/models/Account';
 import { defaultDeviceProfile, type DeviceProfile } from '../../telegram/client';
 import { applyWarmingSchedule } from '../accounts/warming';
+import { resolveSendingWindowForNewAccount } from '../accounts/regionalSendingWindow';
 import { logSessionEvent } from './sessionEvents';
 import { buildGramJsStringSessionV1 } from './gramJsStringSession';
 import { connectWithSavedSession } from './connect';
@@ -18,6 +19,8 @@ export interface ImportSessionOptions {
   telegramApiId?: number;
   /** Per-account Telegram API hash (overrides TG_API_HASH in .env). */
   telegramApiHash?: string;
+  /** ISO2 region for default sending window (else derived from phone). */
+  sendingWindowRegion?: string;
 }
 
 /**
@@ -82,6 +85,7 @@ export async function importSessionString(
       ? { telegramApiId: config.TG_API_ID, telegramApiHash: config.TG_API_HASH.trim() }
       : {};
 
+  const sw = resolveSendingWindowForNewAccount(phone.trim(), opts.sendingWindowRegion ?? null);
   let account = await AccountModel.findOne({ phone: phone.trim() });
   if (!account) {
     account = await AccountModel.create({
@@ -93,9 +97,9 @@ export async function importSessionString(
       sessionAuthorizedAt: new Date(),
       status: 'warming',
       sendingWindow: {
-        start: config.DEFAULT_WINDOW_START,
-        end: config.DEFAULT_WINDOW_END,
-        timezone: config.DEFAULT_TIMEZONE,
+        start: sw.start,
+        end: sw.end,
+        timezone: sw.timezone,
       },
       dailyLimits: {
         msgsToNew: config.DEFAULT_MSGS_PER_DAY,

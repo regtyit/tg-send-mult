@@ -1,5 +1,7 @@
 import { logger } from '../../logger';
+import { isWithinSendingWindowAccount } from '../../modules/antilimit/window';
 import { describeSenderEligibility, formatEligibilityReasons } from '../../modules/multi/senderEligibility';
+import type { AccountDoc } from '../../db/models/Account';
 
 /**
  * Strip sensitive fields from API responses.
@@ -36,6 +38,15 @@ export function sanitizeAccount(doc: unknown): Record<string, unknown> | null {
   const out: Record<string, unknown> = { ...obj };
   out.hasSession = nonEmptyString(obj.sessionEnc);
   out.hasTelegramApiHash = nonEmptyString(obj.telegramApiHash);
+  const sw = obj.sendingWindow as AccountDoc['sendingWindow'] | undefined;
+  if (sw && typeof sw === 'object') {
+    out.sendingWindow = sw;
+    const inWindow = isWithinSendingWindowAccount({ sendingWindow: sw } as AccountDoc);
+    out.sendingActiveNow = inWindow;
+    if (!inWindow) {
+      out.sendingQuietUntil = `Outside local window ${sw.start}–${sw.end} (${sw.timezone})`;
+    }
+  }
   const { eligible, reasons } = describeSenderEligibility({
     sessionEnc: typeof obj.sessionEnc === 'string' ? obj.sessionEnc : '',
     role: typeof obj.role === 'string' ? obj.role : 'sender',

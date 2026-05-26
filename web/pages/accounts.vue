@@ -107,6 +107,19 @@
             density="comfortable"
           />
         </v-col>
+        <v-col cols="12" md="4">
+          <v-select
+            v-model="newSendingWindowRegion"
+            :items="regionItems"
+            item-title="title"
+            item-value="value"
+            label="Sending region (quiet hours)"
+            variant="outlined"
+            density="comfortable"
+            hint="Auto picks hours from phone country; bot does not send outside this window"
+            persistent-hint
+          />
+        </v-col>
         <v-col cols="12" md="2">
           <v-btn color="primary" block :loading="registering" :disabled="registering" @click="registerShell">
             Add row
@@ -211,6 +224,22 @@
         <span v-if="item.telegramUsername" class="cell-overflow font-mono">@{{ item.telegramUsername }}</span>
         <span v-else class="text-medium-emphasis">—</span>
       </template>
+      <template #[`item.activeHours`]="{ item }">
+        <span v-if="item.sendingWindow" class="text-caption cell-overflow" :title="activeHoursTitle(item)">
+          {{ item.sendingWindow.start }}–{{ item.sendingWindow.end }}
+          <span class="d-block text-medium-emphasis">{{ item.sendingWindow.timezone }}</span>
+        </span>
+        <span v-else class="text-medium-emphasis">—</span>
+        <v-chip
+          v-if="item.sendingWindow"
+          size="x-small"
+          class="mt-1"
+          :color="item.sendingActiveNow ? 'success' : 'warning'"
+          variant="tonal"
+        >
+          {{ item.sendingActiveNow ? 'active now' : 'quiet (no sends)' }}
+        </v-chip>
+      </template>
       <template #[`item.status`]="{ item }">
         <span class="cell-overflow">{{ item.status }}</span>
       </template>
@@ -314,6 +343,7 @@
               <v-list density="compact" min-width="200">
                 <v-list-item title="Quarantine" @click="setStatus(item._id, 'quarantined')" />
                 <v-list-item title="Auto-assign proxy" @click="autoAssignMtproxy(item._id)" />
+                <v-list-item title="Reset hours to phone region" @click="applyRegionalWindow(item._id)" />
                 <v-list-item title="Clear proxy" @click="clearMtproxy(item._id)" />
                 <v-divider />
                 <v-list-item title="Delete account" class="text-error" @click="removeSender(item._id)" />
@@ -357,6 +387,9 @@ interface Account {
   status: string;
   role?: 'sender' | 'test_recipient';
   healthScore: number;
+  sendingWindow?: { start: string; end: string; timezone: string };
+  sendingActiveNow?: boolean;
+  sendingQuietUntil?: string;
   deviceProfile?: {
     deviceModel?: string;
     systemVersion?: string;
@@ -366,6 +399,13 @@ interface Account {
   };
   dailyLimits?: { msgsToNew?: number; ratePerHour?: number };
   dailyCounters?: { msgsToNew?: number };
+}
+interface RegionRow {
+  countryIso2: string;
+  name: string;
+  timezone: string;
+  windowStart: string;
+  windowEnd: string;
 }
 interface ProxyRow {
   _id: string;
@@ -402,11 +442,22 @@ const importTdataPath = ref('');
 const importJsonPath = ref('');
 const importProxyId = ref('');
 const importRole = ref<'sender' | 'test_recipient'>('sender');
+const newSendingWindowRegion = ref('');
+const regions = ref<RegionRow[]>([]);
+
+const regionItems = computed(() => [
+  { title: 'Auto from phone number', value: '' },
+  ...regions.value.map((r) => ({
+    title: `${r.countryIso2} — ${r.name} (${r.windowStart}–${r.windowEnd}, ${r.timezone})`,
+    value: r.countryIso2,
+  })),
+]);
 
 const headers = [
   fixedCol('Phone', 'phone', 130),
   fixedCol('Label', 'label', 90),
   fixedCol('Role', 'role', 118, { sortable: false }),
+  fixedCol('Active hours', 'activeHours', 120, { sortable: false }),
   fixedCol('API', 'telegramApi', 72, { sortable: false }),
   fixedCol('@user', 'telegramUsername', 100),
   fixedCol('Proxy', 'proxy', 88, { sortable: false }),
@@ -424,6 +475,22 @@ function proxyOptionsForAccount(accountId: string): ProxyRow[] {
       .map((a) => String(a.proxyId)),
   );
   return proxies.value.filter((p) => !usedByOther.has(p._id));
+}
+
+function activeHoursTitle(item: Account): string {
+  const sw = item.sendingWindow;
+  if (!sw) return '';
+  const quiet = item.sendingQuietUntil ? ` · ${item.sendingQuietUntil}` : '';
+  return `${sw.start}–${sw.end} ${sw.timezone}${quiet}`;
+}
+
+async function loadRegions(): Promise<void> {
+  try {
+    const data = await apiFetch<{ regions: RegionRow[] }>('/api/regions/sending-windows');
+    regions.value = data.regions ?? [];
+  } catch {
+    regions.value = [];
+  }
 }
 
 function proxyLabel(proxyId?: string | null): string {
@@ -454,6 +521,10 @@ async function load(): Promise<void> {
 
 const { running: polling, refresh } = usePolling(load, { intervalMs: 10000 });
 
+onMounted(() => {
+  void loadRegions();
+});
+
 async function registerShell(): Promise<void> {
   const phone = newPhone.value.trim();
   if (!phone || phone.length < 8) {
@@ -470,6 +541,9 @@ async function registerShell(): Promise<void> {
       body: JSON.stringify({
         phone,
         label: newLabel.value.trim(),
+        ...(newSendingWindowRegion.value.trim()
+          ? { sendingWindowRegion: newSendingWindowRegion.value.trim().toUpperCase() }
+          : {}),
         ...(typeof apiId === 'number' && !Number.isNaN(apiId) && apiId > 0 && apiHash
           ? { telegramApiId: apiId, telegramApiHash: apiHash }
           : {}),
@@ -621,6 +695,19 @@ async function autoAssignMtproxy(accountId: string): Promise<void> {
       body: JSON.stringify({ auto: true }),
     });
     toast.success('MTProxy auto-assigned.');
+    await load();
+  } catch (e) {
+    toast.error(errorText(e));
+  }
+}
+
+async function applyRegionalWindow(accountId: string): Promise<void> {
+  try {
+    await apiFetch(`/api/accounts/${accountId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ applyRegionalWindow: true }),
+    });
+    toast.success('Active hours updated from phone region.');
     await load();
   } catch (e) {
     toast.error(errorText(e));

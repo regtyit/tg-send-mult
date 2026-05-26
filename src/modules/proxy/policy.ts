@@ -1,16 +1,6 @@
-import { parsePhoneNumber } from 'libphonenumber-js';
 import type { ProxyDoc } from '../../db/models/Proxy';
 import { TgDomainError } from '../../telegram/errors';
-
-function phoneCountryIso2(phone: string): string | null {
-  try {
-    const parsed = parsePhoneNumber(phone.trim());
-    const country = parsed?.country?.toUpperCase();
-    return country || null;
-  } catch {
-    return null;
-  }
-}
+import { phoneCountryIso2 } from '../accounts/phoneCountry';
 
 /**
  * Enforces Telegram access policy:

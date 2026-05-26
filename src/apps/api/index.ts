@@ -8,8 +8,13 @@ import { createBullBoard } from '@bull-board/api';
 import { BullMQAdapter } from '@bull-board/api/bullMQAdapter';
 import { FastifyAdapter } from '@bull-board/fastify';
 import { Types } from 'mongoose';
-import { parsePhoneNumber } from 'libphonenumber-js';
 import { config } from '../../config';
+import { phoneCountryIso2 } from '../../modules/accounts/phoneCountry';
+import {
+  getRegionalSendingWindow,
+  listRegionalSendingWindows,
+  resolveSendingWindowForNewAccount,
+} from '../../modules/accounts/regionalSendingWindow';
 import { connectMongo } from '../../db';
 import {
   AccountModel,
@@ -80,14 +85,6 @@ function normalizeDeviceProfile(input?: Partial<DeviceProfile> | null): DevicePr
     langCode: trimOr(input?.langCode, defaults.langCode),
     systemLangCode: trimOr(input?.systemLangCode, defaults.systemLangCode),
   };
-}
-
-function phoneCountryIso2(phone: string): string | null {
-  try {
-    return parsePhoneNumber(phone.trim())?.country?.toUpperCase() ?? null;
-  } catch {
-    return null;
-  }
 }
 
 /** `request.url` path segment only (no query string). */
@@ -283,12 +280,26 @@ async function main() {
         sanitizeAccounts(await AccountModel.find().sort({ createdAt: -1 }).lean()),
       );
 
+      r.get('/regions/sending-windows', async () => ({
+        regions: listRegionalSendingWindows(),
+      }));
+
       r.post('/accounts', async (req, reply) => {
         const body = validate(reply, accountCreateBody, req.body);
         if (!body) return;
         const proxyId = body.proxyId ? new Types.ObjectId(body.proxyId) : null;
         const tid = typeof body.telegramApiId === 'number' ? body.telegramApiId : null;
         const th = body.telegramApiHash?.trim() ?? '';
+        const sw = body.sendingWindow
+          ? {
+              start: body.sendingWindow.start,
+              end: body.sendingWindow.end,
+              timezone: body.sendingWindow.timezone,
+            }
+          : resolveSendingWindowForNewAccount(
+              body.phone.trim(),
+              body.sendingWindowRegion ?? null,
+            );
         const created = await AccountModel.create({
           phone: body.phone.trim(),
           label: body.label ?? '',
@@ -297,9 +308,9 @@ async function main() {
           proxyId,
           ...(tid && th ? { telegramApiId: tid, telegramApiHash: th } : {}),
           sendingWindow: {
-            start: config.DEFAULT_WINDOW_START,
-            end: config.DEFAULT_WINDOW_END,
-            timezone: config.DEFAULT_TIMEZONE,
+            start: sw.start,
+            end: sw.end,
+            timezone: sw.timezone,
           },
           dailyLimits: {
             msgsToNew: config.DEFAULT_MSGS_PER_DAY,
@@ -322,6 +333,17 @@ async function main() {
         const patch: Record<string, unknown> = { ...body };
         delete patch.telegramApiId;
         delete patch.telegramApiHash;
+        delete patch.applyRegionalWindow;
+        if (body.applyRegionalWindow) {
+          const acc = await AccountModel.findById(params.id).lean();
+          if (!acc) return reply.code(404).send({ error: 'not found' });
+          const region = getRegionalSendingWindow(phoneCountryIso2(acc.phone));
+          patch.sendingWindow = {
+            start: region.windowStart,
+            end: region.windowEnd,
+            timezone: region.timezone,
+          };
+        }
         if (body.telegramApiId !== undefined) {
           patch.telegramApiId = body.telegramApiId ?? null;
         }

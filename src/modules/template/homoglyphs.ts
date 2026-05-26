@@ -15,6 +15,7 @@ const LATIN_TO_CYRILLIC_LOOKALIKE: Record<string, string> = {
   P: '\u0420',
   T: '\u0422',
   X: '\u0425',
+  a: '\u0430',
   c: '\u0441',
   e: '\u0435',
   o: '\u043e',

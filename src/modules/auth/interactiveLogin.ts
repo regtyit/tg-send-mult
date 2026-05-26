@@ -14,6 +14,7 @@ import { mapTgError, TgDomainError } from '../../telegram/errors';
 import { assertMtProxyPolicy } from '../proxy/policy';
 import { promptLoginCode, promptLoginPhone, promptTwoFactorPassword } from './loginInquirer';
 import { applyWarmingSchedule } from '../accounts/warming';
+import { resolveSendingWindowForNewAccount } from '../accounts/regionalSendingWindow';
 import { logSessionEvent } from './sessionEvents';
 import { logger } from '../../logger';
 
@@ -39,15 +40,16 @@ export async function interactiveLogin(opts: InteractiveLoginOptions): Promise<A
   const resolvedProxyId = opts.proxyId ?? (account?.proxyId ? String(account.proxyId) : undefined);
   const proxyDoc = resolvedProxyId ? await ProxyModel.findById(new Types.ObjectId(resolvedProxyId)) : null;
   if (!account) {
+    const sw = resolveSendingWindowForNewAccount(phone, null);
     account = await AccountModel.create({
       phone,
       label: opts.label ?? '',
       deviceProfile: opts.deviceProfile ?? defaultDeviceProfile(),
       proxyId: proxyDoc?._id ?? null,
       sendingWindow: {
-        start: config.DEFAULT_WINDOW_START,
-        end: config.DEFAULT_WINDOW_END,
-        timezone: config.DEFAULT_TIMEZONE,
+        start: sw.start,
+        end: sw.end,
+        timezone: sw.timezone,
       },
       dailyLimits: {
         msgsToNew: config.DEFAULT_MSGS_PER_DAY,

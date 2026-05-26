@@ -30,6 +30,7 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 
 COPY --from=build /app/dist ./dist
+COPY --from=build /app/src/data ./dist/data
 COPY --from=web-build /app/src/apps/api/public ./dist/apps/api/public
 COPY python/requirements.txt python/requirements.txt
 COPY python/tg_worker python/tg_worker

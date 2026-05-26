@@ -6,6 +6,7 @@ import { AccountModel, ProxyModel } from '../../db/models';
 import type { AccountDoc } from '../../db/models/Account';
 import { defaultDeviceProfile, type DeviceProfile } from '../../telegram/client';
 import { importSessionString, type ImportSessionOptions } from './sessionImport';
+import { resolveSendingWindowForNewAccount } from '../accounts/regionalSendingWindow';
 
 interface JsonAccountLike {
   phone?: string | null;
@@ -200,6 +201,7 @@ export async function importAccountFromJsonFile(
 
   let account = await AccountModel.findOne({ phone });
   if (!account) {
+    const sw = resolveSendingWindowForNewAccount(phone, null);
     account = await AccountModel.create({
       phone,
       label,
@@ -207,9 +209,9 @@ export async function importAccountFromJsonFile(
       proxyId: proxyDoc?._id ?? null,
       status: 'new',
       sendingWindow: {
-        start: config.DEFAULT_WINDOW_START,
-        end: config.DEFAULT_WINDOW_END,
-        timezone: config.DEFAULT_TIMEZONE,
+        start: sw.start,
+        end: sw.end,
+        timezone: sw.timezone,
       },
       dailyLimits: {
         msgsToNew: config.DEFAULT_MSGS_PER_DAY,

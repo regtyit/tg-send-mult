@@ -184,12 +184,16 @@
       </v-btn>
 
       <v-card v-if="previewLines.length" variant="tonal" class="pa-3 mb-2">
-        <div class="text-caption text-medium-emphasis mb-2">Preview</div>
-        <div v-for="(line, i) in previewLines" :key="i" class="text-body-2 mb-1">
-          <v-chip size="x-small" class="mr-2">{{ line.who }}</v-chip>
-          {{ line.text || '…' }}
-          <span v-if="line.wait" class="text-caption text-warning"> · wait: «{{ line.wait }}»</span>
-          <span class="text-caption text-medium-emphasis"> · pause {{ line.pauseMin }}–{{ line.pauseMax }}s</span>
+        <div class="text-caption text-medium-emphasis mb-2">Preview &amp; schedule (auto mode)</div>
+        <div v-for="(line, i) in previewScheduleRows" :key="i" class="text-body-2 mb-2">
+          <v-chip size="x-small" class="mr-2">{{ line.line }}</v-chip>
+          <v-chip size="x-small" class="mr-2">{{ previewLines[i]?.who }}</v-chip>
+          {{ previewLines[i]?.text || '…' }}
+          <div class="text-caption text-primary ml-8">{{ line.when }}</div>
+          <div v-if="line.pauseBefore" class="text-caption text-medium-emphasis ml-8">
+            Pause before this line: {{ line.pauseBefore }}
+            <span v-if="line.waitForText"> · wait for «{{ line.waitForText }}»</span>
+          </div>
         </div>
       </v-card>
     </div>
@@ -311,6 +315,7 @@
 </template>
 
 <script setup lang="ts">
+import { buildDialogTurnSchedule } from '~/utils/dialogSchedule';
 import { previewTemplate } from '~/utils/spintax';
 
 export interface DraftTurn {
@@ -418,6 +423,19 @@ const previewLines = computed(() =>
       pauseMax: dr.max,
     };
   }),
+);
+
+const previewScheduleRows = computed(() =>
+  buildDialogTurnSchedule(
+    turns.value.map((t, idx) => {
+      const dr = delayRangeFromPause(t.pauseSec);
+      return {
+        delaySecMin: dr.min,
+        delaySecMax: dr.max,
+        waitForText: idx > 0 ? t.waitForText.trim() : '',
+      };
+    }),
+  ),
 );
 
 function addTurn(): void {
