@@ -249,6 +249,7 @@
               </template>
               <v-list density="compact" min-width="200">
                 <v-list-item title="Quarantine" @click="setStatus(item._id, 'quarantined')" />
+                <v-list-item title="Restore health" @click="restoreHealth(item._id)" />
                 <v-list-item title="Auto-assign proxy" @click="autoAssignMtproxy(item._id)" />
                 <v-list-item title="Active hours…" @click="openHoursEditor(item)" />
                 <v-list-item title="Clear proxy" @click="clearMtproxy(item._id)" />
@@ -576,6 +577,16 @@ async function autoAssignMtproxy(accountId: string): Promise<void> {
       body: JSON.stringify({ auto: true }),
     });
     toast.success('MTProxy auto-assigned.');
+    await load();
+  } catch (e) {
+    toast.error(errorText(e));
+  }
+}
+
+async function restoreHealth(accountId: string): Promise<void> {
+  try {
+    await apiFetch(`/api/accounts/${accountId}/restore-health`, { method: 'POST' });
+    toast.success('Health counters reset; score recomputed.');
     await load();
   } catch (e) {
     toast.error(errorText(e));

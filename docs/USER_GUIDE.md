@@ -333,6 +333,12 @@ A sender must satisfy **all** of:
 
 If you start a campaign with no eligible senders, start fails with a detailed pool error.
 
+### Health score
+
+Rolling counters (`sent24h`, `failed24h`, `floodWait24h`, `peerFlood24h`) feed the score; the scheduler resets them daily per account timezone. **MTProxy transport errors** (timeouts, connection reset, TLS/proxy handshake failures mapped as `network`) are **not** counted as delivery failures for health, because they reflect connectivity, not the sender account itself. **Proxy policy** errors (no MTProxy assigned, wrong country) are also excluded.
+
+After fixing a bad proxy, use **More → Restore health** on the Senders page (or `POST /api/accounts/:id/restore-health`) to clear the rolling counters and recompute the score so the account can rejoin the pool immediately.
+
 ### Per-account limits (editable on Senders page)
 
 | Setting | Default (from `.env`) | Meaning |
@@ -583,6 +589,7 @@ Auth: HTTP Basic (`API_BASIC_USER` / `API_BASIC_PASSWORD`)
 | POST | `/accounts/:id/send-test` | Send one test message |
 | POST | `/accounts/:id/inbound-replies/sync` | Force inbox sync |
 | POST | `/accounts/:id/assign-mtproxy` | Manual or auto proxy assign |
+| POST | `/accounts/:id/restore-health` | Reset rolling health counters and recompute score |
 | POST | `/accounts/assign-mtproxy-auto` | Bulk auto-assign |
 | POST | `/accounts/import-tdata` | Import Telegram Desktop session |
 | POST | `/accounts/import-json` | Import JSON session export |

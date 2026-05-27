@@ -13,7 +13,7 @@ import { warmingMsgsPerDayCap } from '../../modules/accounts/warming';
 import { lognormalDelayMs } from '../../modules/antilimit/jitter';
 import { isWithinCampaignWindow, isWithinSendingWindowAccount } from '../../modules/antilimit/window';
 import { sendText } from '../../modules/messaging/send';
-import { recomputeHealthScore } from '../../modules/multi/health';
+import { deliveryFailureAffectsSenderHealth, recomputeHealthScore } from '../../modules/multi/health';
 import { persistSenderLink } from '../../modules/multi/stickyAssignment';
 import type { SendMessageJobData } from '../queues';
 import { mapTgError, TgDomainError } from '../../telegram/errors';
@@ -295,6 +295,29 @@ export async function processSendMessageJob(
       account.healthMetrics.peerFlood24h = (account.healthMetrics.peerFlood24h ?? 0) + 1;
       account.healthScore = recomputeHealthScore(account);
       await account.save();
+      await MessageModel.updateOne(
+        { _id: msg._id },
+        {
+          $set: {
+            status: 'failed',
+            error: { code: mapped.code, message: mapped.message },
+          },
+        },
+      );
+      if (msg.campaignId) {
+        await CampaignModel.updateOne({ _id: msg.campaignId }, { $inc: { 'stats.failed': 1 } });
+      }
+      await writeDeliveryEvent(
+        {
+          messageId: msg._id,
+          campaignId: msg.campaignId ?? null,
+          accountId: msg.accountId ?? null,
+          contactId: msg.contactId,
+        },
+        'failed',
+        { code: mapped.code, message: mapped.message },
+      );
+      throw new UnrecoverableError(mapped.message);
     }
 
     if (mapped.kind === 'peer_blocked' || mapped.kind === 'peer_invalid') {
@@ -336,43 +359,73 @@ export async function processSendMessageJob(
       await account.save();
     }
 
-    account.dailyCounters = account.dailyCounters ?? {};
-    account.dailyCounters.failedTotal = (account.dailyCounters.failedTotal ?? 0) + 1;
-    account.healthMetrics = account.healthMetrics ?? {};
-    account.healthMetrics.failed24h = (account.healthMetrics.failed24h ?? 0) + 1;
+    const maxAttempts = job.opts.attempts ?? 5;
+    const isUnrecoverable = err instanceof UnrecoverableError;
+    const willRetry = Boolean(
+      mapped.retryable && !isUnrecoverable && job.attemptsMade + 1 < maxAttempts,
+    );
+
+    if (willRetry) {
+      await MessageModel.updateOne({ _id: msg._id }, { $set: { status: 'queued' } });
+      await writeDeliveryEvent(
+        {
+          messageId: msg._id,
+          campaignId: msg.campaignId ?? null,
+          accountId: msg.accountId ?? null,
+          contactId: msg.contactId,
+        },
+        'delayed',
+        {
+          reason: 'send_retry',
+          code: mapped.code ?? 'ERROR',
+          message: mapped.message ?? String(err),
+          attempt: job.attemptsMade + 1,
+          maxAttempts,
+        },
+      );
+    } else {
+      await MessageModel.updateOne(
+        { _id: msg._id },
+        {
+          $set: {
+            status: 'failed',
+            error: { code: mapped.code ?? 'ERROR', message: mapped.message ?? String(err) },
+          },
+        },
+      );
+      if (msg.campaignId) {
+        await CampaignModel.updateOne({ _id: msg.campaignId }, { $inc: { 'stats.failed': 1 } });
+      }
+      await writeDeliveryEvent(
+        {
+          messageId: msg._id,
+          campaignId: msg.campaignId ?? null,
+          accountId: msg.accountId ?? null,
+          contactId: msg.contactId,
+        },
+        'failed',
+        {
+          code: mapped.code ?? 'ERROR',
+          message: mapped.message ?? String(err),
+          retryable: mapped.retryable,
+        },
+      );
+    }
+
+    const penalizeCounters =
+      deliveryFailureAffectsSenderHealth(mapped.kind) && (!mapped.retryable || !willRetry);
+    if (penalizeCounters) {
+      account.dailyCounters = account.dailyCounters ?? {};
+      account.dailyCounters.failedTotal = (account.dailyCounters.failedTotal ?? 0) + 1;
+      account.healthMetrics = account.healthMetrics ?? {};
+      account.healthMetrics.failed24h = (account.healthMetrics.failed24h ?? 0) + 1;
+    }
     account.healthScore = recomputeHealthScore(account);
     account.lastErrorCode = mapped.code ?? 'ERROR';
     account.lastErrorMessage = mapped.message ?? String(err);
     await account.save();
 
-    await MessageModel.updateOne(
-      { _id: msg._id },
-      {
-        $set: {
-          status: 'failed',
-          error: { code: mapped.code ?? 'ERROR', message: mapped.message ?? String(err) },
-        },
-      },
-    );
-    if (msg.campaignId) {
-      await CampaignModel.updateOne({ _id: msg.campaignId }, { $inc: { 'stats.failed': 1 } });
-    }
-    await writeDeliveryEvent(
-      {
-        messageId: msg._id,
-        campaignId: msg.campaignId ?? null,
-        accountId: msg.accountId ?? null,
-        contactId: msg.contactId,
-      },
-      'failed',
-      {
-        code: mapped.code ?? 'ERROR',
-        message: mapped.message ?? String(err),
-        retryable: mapped.retryable,
-      },
-    );
-
-    if (mapped.retryable) {
+    if (willRetry) {
       throw err;
     }
     throw new UnrecoverableError(mapped.message ?? String(err));

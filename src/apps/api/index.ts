@@ -35,6 +35,7 @@ import { parseCsvBuffer, parseJsonBuffer, importContactsFromRows } from '../../m
 import { ensureContactForTestRecipient } from '../../modules/contacts/testRecipient';
 import { importAccountFromJsonFile, importSessionFromTdata, readJsonAccountMetadata } from '../../modules/auth/login';
 import { pauseCampaign, resumeCampaign, startCampaign } from '../../modules/messaging/campaignLifecycle';
+import { restoreAccountHealthById } from '../../modules/accounts/restoreHealth';
 import { resolveAccountSpecifiers } from '../../modules/accounts/resolveAccountSpecifiers';
 import { defaultDeviceProfile, type DeviceProfile } from '../../telegram/client';
 import { tryParseTelegramProxyLink } from '../../telegram/proxyPayload';
@@ -249,6 +250,14 @@ async function main() {
           await ensureContactForTestRecipient(created);
         }
         return sanitizeAccount(created);
+      });
+
+      r.post('/accounts/:id/restore-health', async (req, reply) => {
+        const params = validate(reply, idParams, req.params, 'params');
+        if (!params) return;
+        const updated = await restoreAccountHealthById(params.id);
+        if (!updated) return reply.code(404).send({ error: 'not found' });
+        return sanitizeAccount(updated);
       });
 
       r.patch('/accounts/:id', async (req, reply) => {
