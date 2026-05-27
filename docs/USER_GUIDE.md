@@ -135,7 +135,7 @@ Do not run native `mongod`/`valkey` and Docker with the **same data directories*
 
 ## Dashboard walkthrough
 
-Navigation: **Senders · MTProto · Contacts · Templates · Campaigns · Dialogs · Queues**
+Navigation: **Senders · Proxies · Contacts · Templates · Campaigns · Dialogs · Queues**
 
 ### Senders (`/accounts`)
 
@@ -146,7 +146,7 @@ Manage Telegram sessions that **send** mail.
 - **Bulk CSV import** — columns: `phone`, `label`, `role`, `sessionPath`, `proxyLabel` (paths on the API server).
 - **Role dropdown** — `sender` (default) or `test_recipient`.
 - **Status** — `new`, `warming`, `active`, `paused`, `quarantined`, `banned`.
-- **Auto-assign MTProxy** — picks a free proxy matching the phone's country (one proxy per account).
+- **Auto-assign proxy** — picks a proxy matching the phone's country (MTProto, SOCKS5, or HTTP). Several senders may share the same proxy.
 - **Per-row actions** — pause/resume, send test, sync inbox, edit limits and sending window.
 
 Login via CLI (recommended first time):
@@ -155,18 +155,18 @@ Login via CLI (recommended first time):
 npm run cli -- auth login --proxy-id <proxyId>
 ```
 
-### MTProto (`/proxies`)
+### Proxies (`/proxies`)
 
-Manage connection endpoints for senders.
+Manage connection endpoints for senders (**MTProto**, **SOCKS5**, **HTTP**).
 
-- **MTProxy** — preferred; supports `dd...`, `ee...` (FakeTLS), and 32-hex secrets.
-- **SOCKS5** — alternative type.
-- **Country code** — ISO-2 (e.g. `DE`); used for auto-assign and policy checks.
+- **MTProxy** — supports `dd...`, `ee...` (FakeTLS), and 32-hex secrets.
+- **SOCKS5 / HTTP** — assign like MTProto; Telethon uses them for outbound Telegram traffic when set on the account.
+- **Country code** — ISO-2 (e.g. `DE`); used for auto-assign and policy checks (must match sender phone country).
 - **Test proxy** — optional live check using a sender session (works for MTProto, SOCKS5, and HTTP transport).
 - **Bulk import** — paste or upload CSV/JSON with `label`, `type`, `host`, `port`, `country`, `secret`, etc.
 - **Test all** — runs connectivity test on every proxy in the database.
 
-**Note:** Campaign **sending** still requires an **MTProxy** whose country matches the sender phone. SOCKS5/HTTP can be tested but are not used for outbound sends under current policy.
+**Note:** Outbound sends require an assigned proxy whose **country** matches the sender phone. Multiple accounts may use the same proxy endpoint.
 
 Add via CLI:
 
@@ -174,7 +174,7 @@ Add via CLI:
 npm run cli -- proxies add-mtproto --host <ip> --port <n> --secret <hex> --country <ISO2>
 ```
 
-You can paste a Telegram proxy link (`tg://proxy?...`) as the host field; the app parses it.
+You can paste a Telegram proxy link (`tg://proxy?...` or `t.me/proxy?...`) in the **Host** field; the dashboard splits it into host, port, and **secret** before saving (same as scanning the QR into the clipboard and using **Paste link / QR text**). **Decode QR image** uses the browser’s BarcodeDetector where available (e.g. Chrome). The API returns proxy `secret` / login fields in list and detail responses (protect dashboard access accordingly).
 
 ### Contacts (`/contacts`)
 
@@ -248,7 +248,7 @@ npm run cli -- dialog sessions start <sessionId>
 
 ### A. First sender and test message
 
-1. Add an MTProxy on the MTProto page (or CLI).
+1. Add a proxy on the Proxies page (or CLI).
 2. Log in:
    ```bash
    npm run cli -- auth login --proxy-id <proxyId>
@@ -354,17 +354,19 @@ The scheduler resets daily counters when the calendar day changes in each accoun
 
 ## Proxies and MTProxy
 
-**Policy:** one MTProxy (or proxy) per sending account. Auto-assign skips proxies already linked to another account and prefers higher `healthScore`.
+**Policy:** each sending account must have a proxy assigned (**MTProto**, **SOCKS5**, or **HTTP**). Proxy **country** must match the phone's country. **Several accounts may use the same proxy.** Auto-assign picks by `healthScore` among proxies for that country.
 
 **Country matching:** when assigning manually or automatically, proxy country should match the phone's country (derived from E.164).
 
-**FakeTLS (`ee...` secrets):** included in `npm run setup:python` (`TelethonFakeTLS` in `python/requirements.txt`). After pulling updates, re-run `npm run setup:python` or rebuild the Docker image.
+**FakeTLS (`ee...` extended secrets):** if the secret is **longer than 32 hex characters**, it is Fake-TLS and needs `TelethonFakeTLS` from `npm run setup:python`. If the secret is **exactly 32 hex characters**, it uses classic MTProxy (the bridge tries **randomized intermediate then abridged**). Keys whose hex starts with `ee` but total length is 32 are **not** Fake-TLS.
 
-| Secret prefix | Transport |
-|---------------|-----------|
-| `dd...` | MTProxy randomized intermediate |
-| `ee...` | FakeTLS (needs TelethonFakeTLS) |
-| 32 hex chars | MTProxy abridged |
+| Secret shape | Transports tried (in order) |
+|--------------|-----------------------------|
+| `dd...` | Randomized intermediate only |
+| `ee...` longer than 32 hex | Fake-TLS (TelethonFakeTLS) |
+| **Exactly** 32 hex chars | Randomized intermediate → abridged |
+
+**Import:** you can paste a `t.me/proxy?...` link in the **host** or **secret** column, put **host:port** in the host field, and secrets are normalized (spaces stripped, hex cleaned).
 
 CLI Telegram commands (`auth login`, `send-test`, etc.) require `--proxy-id`, or `TELEGRAM_PROXY_ID`, or `TG_MTPROXY_*` in `.env`.
 
@@ -693,7 +695,7 @@ Telegram may restrict new or recently changed sessions until you use the **offic
 
 ### Proxy errors
 
-- One proxy per account — resolve conflicts on MTProto page.
+- Several accounts may share the same proxy; fix dead proxies on the Proxies page.
 - Country mismatch — proxy ISO-2 must match phone country for assign.
 - Test proxy from dashboard with a sender that has a session.
 

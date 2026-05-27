@@ -4,10 +4,14 @@ import { dirname, resolve } from 'node:path';
 const rootDir = dirname(fileURLToPath(import.meta.url));
 /** Nitro writes `.output/public/` under this directory; Fastify serves that folder. */
 const nitroOutDir = resolve(rootDir, '../src/apps/api/public/.nuxt-spa');
+const repoSrc = resolve(rootDir, '../src');
 
 export default defineNuxtConfig({
   ssr: false,
   compatibilityDate: '2024-11-01',
+  alias: {
+    '@repo': repoSrc,
+  },
   css: ['~/assets/data-tables.css'],
   typescript: { strict: true },
   modules: ['vuetify-nuxt-module'],

@@ -15,8 +15,8 @@
       <div class="font-weight-medium mb-2">How this app is structured</div>
       <ul class="text-body-2 pl-4 mb-0">
         <li>
-          <strong>Sending accounts</strong> (this page): import <strong>tdata + JSON</strong> below (MTProxy auto-assigned on
-          create). Pick or change MTProxy per row in the table after import.
+          <strong>Sending accounts</strong> (this page): import <strong>tdata + JSON</strong> below (a matching-country
+          proxy is auto-assigned on create). Pick or change proxy per row in the table after import.
         </li>
         <li>
           <strong>Recipients</strong> live under
@@ -38,13 +38,13 @@
       {{ loadErr }}
     </v-alert>
     <v-btn color="secondary" variant="tonal" class="mb-4" :loading="autoAssigning" @click="autoAssignAllMtproxy">
-      Auto-assign MTProxy by phone country
+      Auto-assign proxy by phone country
     </v-btn>
 
     <v-card class="mb-6 pa-4" variant="outlined">
       <v-card-title class="text-subtitle-1 px-0 pt-0">Import sender (tdata + JSON)</v-card-title>
       <p class="text-caption text-medium-emphasis mb-4">
-        Paste server paths to Telegram Desktop <code>tdata</code> and the matching JSON export. On create, MTProxy is
+        Paste server paths to Telegram Desktop <code>tdata</code> and the matching JSON export. On create, a proxy is
         auto-assigned by phone country — assign or change it manually in the table below.
       </p>
       <v-row dense align="end">
@@ -264,7 +264,7 @@
               :items="proxyOptionsForAccount(item._id)"
               item-title="label"
               item-value="_id"
-              label="MTProxy"
+              label="Proxy"
               variant="outlined"
               density="compact"
               hide-details
@@ -433,13 +433,8 @@ function activeHoursTitle(item: Account): string {
   return `${sw.start}–${sw.end} ${sw.timezone}${quiet}`;
 }
 
-function proxyOptionsForAccount(accountId: string): ProxyRow[] {
-  const usedByOther = new Set(
-    rows.value
-      .filter((a) => a._id !== accountId && a.proxyId)
-      .map((a) => String(a.proxyId)),
-  );
-  return proxies.value.filter((p) => !usedByOther.has(p._id));
+function proxyOptionsForAccount(_accountId: string): ProxyRow[] {
+  return proxies.value;
 }
 
 function setSelectedProxy(accountId: string, proxyId: string): void {
@@ -458,7 +453,7 @@ async function loadRegions(): Promise<void> {
 function proxyLabel(proxyId?: string | null): string {
   if (!proxyId) return '—';
   const p = proxies.value.find((x) => x._id === String(proxyId));
-  return p ? `${p.label} (${p.country || '—'})` : String(proxyId);
+  return p ? `${p.label} · ${p.type} (${p.country || '—'})` : String(proxyId);
 }
 
 async function load(): Promise<void> {
@@ -466,7 +461,7 @@ async function load(): Promise<void> {
     loadErr.value = '';
     const [a, p] = await Promise.all([apiFetch<Account[]>('/api/accounts'), apiFetch<ProxyRow[]>('/api/proxies')]);
     rows.value = a;
-    proxies.value = p.filter((x) => x.type === 'mtproto');
+    proxies.value = p;
     for (const acc of rows.value) {
       selectedProxyByAccount.value[acc._id] = acc.proxyId ? String(acc.proxyId) : '';
     }
@@ -499,7 +494,7 @@ async function importTdata(): Promise<void> {
         role: importRole.value,
       }),
     });
-    toast.success('Sender imported. MTProxy auto-assigned — confirm proxy or send a test message.');
+    toast.success('Sender imported. Proxy auto-assigned — confirm or send a test message.');
   } catch (e) {
     toast.error(errorText(e));
     console.error('import tdata failed', e);
@@ -555,7 +550,7 @@ async function setRole(id: string, role: string): Promise<void> {
 async function assignSelectedMtproxy(accountId: string): Promise<void> {
   const proxyId = (selectedProxyByAccount.value[accountId] ?? '').trim();
   if (!proxyId) {
-    toast.warning('Select MTProxy first.');
+    toast.warning('Select a proxy first.');
     return;
   }
   try {
@@ -563,7 +558,7 @@ async function assignSelectedMtproxy(accountId: string): Promise<void> {
       method: 'POST',
       body: JSON.stringify({ proxyId }),
     });
-    toast.success('MTProxy assigned.');
+    toast.success('Proxy assigned.');
     await load();
   } catch (e) {
     toast.error(errorText(e));
@@ -576,7 +571,7 @@ async function autoAssignMtproxy(accountId: string): Promise<void> {
       method: 'POST',
       body: JSON.stringify({ auto: true }),
     });
-    toast.success('MTProxy auto-assigned.');
+    toast.success('Proxy auto-assigned.');
     await load();
   } catch (e) {
     toast.error(errorText(e));
@@ -656,7 +651,7 @@ async function clearMtproxy(accountId: string): Promise<void> {
       method: 'POST',
       body: JSON.stringify({ proxyId: null }),
     });
-    toast.success('MTProxy unassigned.');
+    toast.success('Proxy unassigned.');
     await load();
   } catch (e) {
     toast.error(errorText(e));

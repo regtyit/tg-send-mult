@@ -30,7 +30,6 @@ from telethon.errors import (
 )
 from telethon.network.connection.tcpmtproxy import (
     ConnectionTcpMTProxyAbridged,
-    ConnectionTcpMTProxyIntermediate,
     ConnectionTcpMTProxyRandomizedIntermediate,
 )
 from telethon.sessions import StringSession
@@ -63,34 +62,116 @@ def _normalize_mtproxy_secret(raw: str) -> str:
     return re.sub(r"[^0-9a-fA-F]", "", s).lower()
 
 
-def _choose_mtproxy_connection_and_secret(secret_hex: str):
+def _mtproxy_transport_variants(secret_hex: str) -> list[tuple[type, str]]:
     """
-    Pick Telethon MTProxy transport by secret prefix.
+    Ordered MTProxy transports to try. Telethon's MTProxyIO rejects non-randomized
+    codecs for dd-secrets (17-byte form); public dd... links must use RandomizedIntermediate
+    only. Classic 32-hex keys often work with RandomizedIntermediate first (Telethon docs).
 
-    - dd... => randomized intermediate (Telethon's intended mode)
-    - ee... => fake-TLS secrets. Native Telethon strips domain support and often
-      fails against pure fake-TLS-only proxies. If optional TelethonFakeTLS is
-      available, use it; otherwise fail with explicit guidance.
-    - plain 32-hex => use abridged transport (widest compatibility).
+    - dd...  → randomized intermediate only.
+    - ee... longer than 32 hex → Fake-TLS (TelethonFakeTLS), secret without ee prefix.
+    - exactly 32 hex → randomized intermediate, then abridged.
     """
     s = (secret_hex or "").lower()
+    variants: list[tuple[type, str]] = []
     if s.startswith("dd"):
-        return ConnectionTcpMTProxyRandomizedIntermediate, s
-    if s.startswith("ee"):
-        # Optional third-party support for fake-TLS.
+        variants.append((ConnectionTcpMTProxyRandomizedIntermediate, s))
+        return variants
+    if s.startswith("ee") and len(s) > 32 and len(s) % 2 == 0:
         try:
             import TelethonFakeTLS  # type: ignore
 
-            # TelethonFakeTLS expects secret without the ee prefix.
-            return TelethonFakeTLS.ConnectionTcpMTProxyFakeTLS, s[2:]
+            variants.append((TelethonFakeTLS.ConnectionTcpMTProxyFakeTLS, s[2:]))
         except Exception as imp_err:
             raise ValueError(
-                "This MTProxy secret looks like fake-TLS (ee...). Install TelethonFakeTLS in the "
-                "Python venv: npm run setup:python (or pip install TelethonFakeTLS in python/.venv). "
+                "This MTProxy secret looks like fake-TLS (ee... longer than 32 hex chars). "
+                "Install TelethonFakeTLS in the Python venv: npm run setup:python "
+                "(or pip install TelethonFakeTLS in python/.venv). "
                 f"Import error: {imp_err!s}"
             ) from imp_err
-    # No dd/ee prefix: standard short secret.
-    return ConnectionTcpMTProxyAbridged, s
+        return variants
+    if re.fullmatch(r"[0-9a-f]{32}", s):
+        variants.append((ConnectionTcpMTProxyRandomizedIntermediate, s))
+        variants.append((ConnectionTcpMTProxyAbridged, s))
+        return variants
+    raise ValueError(
+        "Unrecognized MTProxy secret: use dd..., ee... with extra hex (Fake-TLS), "
+        "or exactly 32 hex chars for a classic 16-byte key."
+    )
+
+
+async def _safe_disconnect(client: TelegramClient | None) -> None:
+    if not client:
+        return
+    try:
+        await client.disconnect()
+    except Exception:
+        pass
+
+
+async def _connect_client(req: dict[str, Any], session_str: str) -> TelegramClient:
+    """Build and connect a TelegramClient, trying MTProxy transport fallbacks when needed."""
+    proxy = req.get("proxy") or {}
+    ptype = (proxy.get("type") or "none").lower()
+    api_id = _parse_api_id(req.get("apiId"))
+    api_hash = _parse_api_hash(req.get("apiHash"))
+    kwargs: dict[str, Any] = {
+        **_device_kwargs(req),
+        "connection_retries": _bridge_int(req, "connectionRetries", 5, min_v=1, max_v=20),
+        "retry_delay": _bridge_int(req, "retryDelay", 1, min_v=0, max_v=60),
+        "timeout": _bridge_int(req, "timeout", 10, min_v=5, max_v=120),
+        "auto_reconnect": False,
+        "flood_sleep_threshold": int(req.get("floodSleepThreshold") or 60),
+    }
+
+    if ptype != "mtproto":
+        sess = StringSession(_normalize_session_string(session_str))
+        if ptype in ("socks5", "http"):
+            host = str(proxy.get("host") or "")
+            port = int(proxy.get("port") or (1080 if ptype == "socks5" else 8080))
+            user = str(proxy.get("username") or "")
+            pwd = str(proxy.get("password") or "")
+            tup: Any = (ptype, host, port)
+            if user or pwd:
+                tup = (ptype, host, port, True, user, pwd)
+            client = TelegramClient(sess, api_id, api_hash, proxy=tup, **kwargs)
+        else:
+            client = TelegramClient(sess, api_id, api_hash, **kwargs)
+        await client.connect()
+        return client
+
+    host = str(proxy.get("host") or "")
+    port = int(proxy.get("port") or 443)
+    secret_hex = _normalize_mtproxy_secret(str(proxy.get("secret") or ""))
+    is_classic = bool(re.fullmatch(r"[0-9a-f]{32}", secret_hex))
+    is_ddee = bool(re.fullmatch(r"(dd|ee)[0-9a-f]{32,}", secret_hex)) and (len(secret_hex) % 2 == 0)
+    if not secret_hex or not (is_classic or is_ddee):
+        raise ValueError(
+            "MTProxy secret must be either 16-byte hex (32 chars) or dd/ee-prefixed hex payload"
+        )
+
+    norm_session = _normalize_session_string(session_str)
+    variants = _mtproxy_transport_variants(secret_hex)
+    last_exc: BaseException | None = None
+    for conn_cls, sec in variants:
+        sess = StringSession(norm_session)
+        client = TelegramClient(
+            sess,
+            api_id,
+            api_hash,
+            proxy=(host, port, sec),
+            connection=conn_cls,
+            **kwargs,
+        )
+        try:
+            await client.connect()
+            return client
+        except BaseException as exc:
+            last_exc = exc
+            await _safe_disconnect(client)
+    if last_exc is not None:
+        raise last_exc
+    raise ConnectionError("MTProxy: no transport variants produced")
 
 
 def _fail(code: str, message: str, wait_seconds: int | None = None) -> dict[str, Any]:
@@ -209,57 +290,6 @@ def _bridge_int(
     return n
 
 
-def _make_client(req: dict[str, Any], session_str: str) -> TelegramClient:
-    api_id = _parse_api_id(req.get("apiId"))
-    api_hash = _parse_api_hash(req.get("apiHash"))
-    sess = StringSession(_normalize_session_string(session_str))
-    proxy = req.get("proxy") or {}
-    ptype = (proxy.get("type") or "none").lower()
-    kwargs: dict[str, Any] = {
-        **_device_kwargs(req),
-        "connection_retries": _bridge_int(req, "connectionRetries", 5, min_v=1, max_v=20),
-        "retry_delay": _bridge_int(req, "retryDelay", 1, min_v=0, max_v=60),
-        "timeout": _bridge_int(req, "timeout", 10, min_v=5, max_v=120),
-        "auto_reconnect": False,
-        "flood_sleep_threshold": int(req.get("floodSleepThreshold") or 60),
-    }
-
-    if ptype == "mtproto":
-        host = str(proxy.get("host") or "")
-        port = int(proxy.get("port") or 443)
-        secret_hex = _normalize_mtproxy_secret(str(proxy.get("secret") or ""))
-        is_classic = bool(re.fullmatch(r"[0-9a-f]{32}", secret_hex))
-        is_ddee = bool(re.fullmatch(r"(dd|ee)[0-9a-f]{32,}", secret_hex)) and (len(secret_hex) % 2 == 0)
-        if not secret_hex or not (is_classic or is_ddee):
-            raise ValueError(
-                "MTProxy secret must be either 16-byte hex (32 chars) or dd/ee-prefixed hex payload"
-            )
-        conn_cls, secret_for_conn = _choose_mtproxy_connection_and_secret(secret_hex)
-        # Telethon's TcpMTProxy.normalize_secret expects a hex/base64 *string*, not raw
-        # bytes; passing bytes triggers ValueError in fromhex() then str/bytes concat in
-        # the base64 fallback (TypeError: can't concat str to bytes).
-        return TelegramClient(
-            sess,
-            api_id,
-            api_hash,
-            proxy=(host, port, secret_for_conn),
-            connection=conn_cls,
-            **kwargs,
-        )
-
-    if ptype in ("socks5", "http"):
-        host = str(proxy.get("host") or "")
-        port = int(proxy.get("port") or (1080 if ptype == "socks5" else 8080))
-        user = str(proxy.get("username") or "")
-        pwd = str(proxy.get("password") or "")
-        tup: Any = (ptype, host, port)
-        if user or pwd:
-            tup = (ptype, host, port, True, user, pwd)
-        return TelegramClient(sess, api_id, api_hash, proxy=tup, **kwargs)
-
-    return TelegramClient(sess, api_id, api_hash, **kwargs)
-
-
 def _proxy_network_hint(req: dict[str, Any] | None) -> str:
     if not req:
         return ""
@@ -273,9 +303,9 @@ def _proxy_network_hint(req: dict[str, Any] | None) -> str:
     port = p.get("port")
     if pt == "mtproto":
         return (
-            f" Using MTProxy {host!s}:{port!s}: confirm host/port/secret, that the proxy is up, "
-            "and that your network allows outbound TCP to it. Try the same proxy in the official "
-            "Telegram app; try login without --proxy-id to see if direct connection works."
+            f" Using MTProxy {host!s}:{port!s}: confirm host/port/secret, proxy is up, and outbound TCP is allowed. "
+            "Ping (ICMP) does not test MTProxy — use the proxy test in this app or open the same link in Telegram. "
+            "The bridge tries multiple MTProto transports (abridged / intermediate / Fake-TLS) automatically."
         )
     if pt == "socks5":
         return (
@@ -312,6 +342,12 @@ def _rpc_to_err(exc: Exception, req: dict[str, Any] | None = None) -> dict[str, 
         return _fail("PASSWORD_HASH_INVALID", str(exc))
     if isinstance(exc, RPCError):
         return _fail(exc.error_message or "RPC_ERROR", str(exc))
+    if isinstance(exc, asyncio.TimeoutError):
+        msg = "Connection timed out" + _proxy_network_hint(req)
+        return _fail("NETWORK", msg)
+    if isinstance(exc, asyncio.IncompleteReadError):
+        msg = (str(exc) or exc.__class__.__name__) + _proxy_network_hint(req)
+        return _fail("INCOMPLETEREADERROR", msg)
     msg = str(exc) or exc.__class__.__name__
     if re.search(r"ECONN|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|TIMEOUT|CONNECTION", msg, re.I):
         msg = msg + _proxy_network_hint(req)
@@ -321,9 +357,9 @@ def _rpc_to_err(exc: Exception, req: dict[str, Any] | None = None) -> dict[str, 
 
 async def handle_get_me(req: dict[str, Any]) -> dict[str, Any]:
     session = str(req.get("session") or "")
-    client = _make_client(req, session)
+    client: TelegramClient | None = None
     try:
-        await client.connect()
+        client = await _connect_client(req, session)
         if not await client.is_user_authorized():
             return _fail("AUTH_KEY_UNREGISTERED", "Session not authorized")
         me = await client.get_me()
@@ -337,14 +373,14 @@ async def handle_get_me(req: dict[str, Any]) -> dict[str, Any]:
     except Exception as exc:
         return _rpc_to_err(exc, req)
     finally:
-        await client.disconnect()
+        await _safe_disconnect(client)
 
 
 async def handle_get_state(req: dict[str, Any]) -> dict[str, Any]:
     session = str(req.get("session") or "")
-    client = _make_client(req, session)
+    client: TelegramClient | None = None
     try:
-        await client.connect()
+        client = await _connect_client(req, session)
         if not await client.is_user_authorized():
             return _fail("AUTH_KEY_UNREGISTERED", "Session not authorized")
         await client(GetStateRequest())
@@ -352,7 +388,7 @@ async def handle_get_state(req: dict[str, Any]) -> dict[str, Any]:
     except Exception as exc:
         return _rpc_to_err(exc, req)
     finally:
-        await client.disconnect()
+        await _safe_disconnect(client)
 
 
 def _normalize_username(raw: str) -> str:
@@ -388,9 +424,9 @@ async def handle_set_typing(req: dict[str, Any]) -> dict[str, Any]:
     seconds = _bridge_int(req, "seconds", 3, min_v=1, max_v=30)
     if not peer:
         return _fail("PEER_EMPTY", "Empty peer")
-    client = _make_client(req, session)
+    client: TelegramClient | None = None
     try:
-        await client.connect()
+        client = await _connect_client(req, session)
         if not await client.is_user_authorized():
             return _fail("AUTH_KEY_UNREGISTERED", "Session not authorized")
         entity = await client.get_entity(peer)
@@ -400,7 +436,7 @@ async def handle_set_typing(req: dict[str, Any]) -> dict[str, Any]:
     except Exception as exc:
         return _rpc_to_err(exc, req)
     finally:
-        await client.disconnect()
+        await _safe_disconnect(client)
 
 
 async def handle_send_message(req: dict[str, Any]) -> dict[str, Any]:
@@ -409,9 +445,9 @@ async def handle_send_message(req: dict[str, Any]) -> dict[str, Any]:
     text = str(req.get("text") or "")
     if not peer:
         return _fail("PEER_EMPTY", "Empty peer")
-    client = _make_client(req, session)
+    client: TelegramClient | None = None
     try:
-        await client.connect()
+        client = await _connect_client(req, session)
         if not await client.is_user_authorized():
             return _fail("AUTH_KEY_UNREGISTERED", "Session not authorized")
         msg = await client.send_message(peer, text)
@@ -420,12 +456,11 @@ async def handle_send_message(req: dict[str, Any]) -> dict[str, Any]:
     except Exception as exc:
         return _rpc_to_err(exc, req)
     finally:
-        await client.disconnect()
+        await _safe_disconnect(client)
 
 
 async def handle_list_incoming(req: dict[str, Any]) -> dict[str, Any]:
     session = str(req.get("session") or "")
-    client = _make_client(req, session)
     limit = _bridge_int(req, "limit", 100, min_v=1, max_v=500)
     per_dialog_limit = _bridge_int(req, "perDialogLimit", 5, min_v=1, max_v=50)
     dialog_limit = _bridge_int(req, "dialogLimit", 80, min_v=1, max_v=500)
@@ -442,8 +477,9 @@ async def handle_list_incoming(req: dict[str, Any]) -> dict[str, Any]:
     dialogs_marked_read = 0
     peers_marked_read: list[str] = []
 
+    client: TelegramClient | None = None
     try:
-        await client.connect()
+        client = await _connect_client(req, session)
         if not await client.is_user_authorized():
             return _fail("AUTH_KEY_UNREGISTERED", "Session not authorized")
 
@@ -512,16 +548,16 @@ async def handle_list_incoming(req: dict[str, Any]) -> dict[str, Any]:
     except Exception as exc:
         return _rpc_to_err(exc, req)
     finally:
-        await client.disconnect()
+        await _safe_disconnect(client)
 
 
 async def handle_auth_send_code(req: dict[str, Any]) -> dict[str, Any]:
     phone = str(req.get("phone") or "").strip()
     force_sms = bool(req.get("forceSMS"))
     session = str(req.get("session") or "")
-    client = _make_client(req, session)
+    client: TelegramClient | None = None
     try:
-        await client.connect()
+        client = await _connect_client(req, session)
         sent = await client.send_code_request(phone, force_sms=force_sms)
         return _ok(
             {
@@ -532,7 +568,7 @@ async def handle_auth_send_code(req: dict[str, Any]) -> dict[str, Any]:
     except Exception as exc:
         return _rpc_to_err(exc, req)
     finally:
-        await client.disconnect()
+        await _safe_disconnect(client)
 
 
 async def handle_auth_sign_in(req: dict[str, Any]) -> dict[str, Any]:
@@ -540,9 +576,9 @@ async def handle_auth_sign_in(req: dict[str, Any]) -> dict[str, Any]:
     code = str(req.get("code") or "").strip()
     phone_hash = str(req.get("phoneCodeHash") or "").strip()
     session = str(req.get("session") or "")
-    client = _make_client(req, session)
+    client: TelegramClient | None = None
     try:
-        await client.connect()
+        client = await _connect_client(req, session)
         await client.sign_in(phone, code, phone_code_hash=phone_hash)
         me = await client.get_me()
         return _ok(
@@ -563,15 +599,15 @@ async def handle_auth_sign_in(req: dict[str, Any]) -> dict[str, Any]:
     except Exception as exc:
         return _rpc_to_err(exc, req)
     finally:
-        await client.disconnect()
+        await _safe_disconnect(client)
 
 
 async def handle_auth_password(req: dict[str, Any]) -> dict[str, Any]:
     password = str(req.get("password") or "")
     session = str(req.get("session") or "")
-    client = _make_client(req, session)
+    client: TelegramClient | None = None
     try:
-        await client.connect()
+        client = await _connect_client(req, session)
         await client.sign_in(password=password)
         me = await client.get_me()
         return _ok(
@@ -584,7 +620,7 @@ async def handle_auth_password(req: dict[str, Any]) -> dict[str, Any]:
     except Exception as exc:
         return _rpc_to_err(exc, req)
     finally:
-        await client.disconnect()
+        await _safe_disconnect(client)
 
 
 HANDLERS = {

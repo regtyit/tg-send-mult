@@ -10,10 +10,7 @@ import { FastifyAdapter } from '@bull-board/fastify';
 import { Types } from 'mongoose';
 import { config } from '../../config';
 import { phoneCountryIso2, normalizePhoneE164 } from '../../modules/accounts/phoneCountry';
-import {
-  claimMtProxyForAccount,
-  ensureProxyNotUsedByAnotherAccount,
-} from '../../modules/proxy/assign';
+import { claimMtProxyForAccount } from '../../modules/proxy/assign';
 import {
   getRegionalSendingWindow,
   listRegionalSendingWindows,
@@ -38,7 +35,7 @@ import { pauseCampaign, resumeCampaign, startCampaign } from '../../modules/mess
 import { restoreAccountHealthById } from '../../modules/accounts/restoreHealth';
 import { resolveAccountSpecifiers } from '../../modules/accounts/resolveAccountSpecifiers';
 import { defaultDeviceProfile, type DeviceProfile } from '../../telegram/client';
-import { tryParseTelegramProxyLink } from '../../telegram/proxyPayload';
+import { coerceMtProxyImportFields } from '../../telegram/proxyPayload';
 import { sendText } from '../../modules/messaging/send';
 import { installShutdownHandlers, onShutdown } from '../../util/shutdown';
 import { syncInboundRepliesForAccount } from '../../modules/messaging/syncInboundReplies';
@@ -285,9 +282,6 @@ async function main() {
         if (body.telegramApiHash !== undefined) {
           patch.telegramApiHash = body.telegramApiHash.trim();
         }
-        if (typeof body.proxyId === 'string' && body.proxyId.trim()) {
-          await ensureProxyNotUsedByAnotherAccount(body.proxyId, params.id);
-        }
         if (body.deviceProfile) {
           const acc = await AccountModel.findById(params.id).lean();
           if (!acc) return reply.code(404).send({ error: 'not found' });
@@ -326,7 +320,7 @@ async function main() {
           }
           const picked = await claimMtProxyForAccount(account._id, country);
           if (!picked) {
-            return reply.code(400).send({ error: `No free proxy for country ${country}` });
+            return reply.code(400).send({ error: `No proxy for country ${country}` });
           }
           const refreshed = await AccountModel.findById(account._id);
           return sanitizeAccount(refreshed);
@@ -335,8 +329,8 @@ async function main() {
         const proxyId = new Types.ObjectId(body.proxyId);
         const proxy = await ProxyModel.findById(proxyId);
         if (!proxy) return reply.code(404).send({ error: 'proxy not found' });
-        if (proxy.type !== 'mtproto') {
-          return reply.code(400).send({ error: 'Only MTProto proxies can be assigned to senders' });
+        if (!['mtproto', 'socks5', 'http'].includes(proxy.type)) {
+          return reply.code(400).send({ error: `Unsupported proxy type: ${proxy.type}` });
         }
         const phoneCountry = phoneCountryIso2(account.phone);
         if (!phoneCountry) {
@@ -347,7 +341,6 @@ async function main() {
             .code(400)
             .send({ error: `Proxy country ${proxy.country} does not match phone country ${phoneCountry}` });
         }
-        await ensureProxyNotUsedByAnotherAccount(String(proxy._id), String(account._id));
         account.set('proxyId', proxy._id);
         await account.save();
         return sanitizeAccount(account);
@@ -371,7 +364,7 @@ async function main() {
           const picked = await claimMtProxyForAccount(acc._id, country);
           if (!picked) {
             skipped++;
-            errors.push(`${acc.phone}: no free proxy for ${country}`);
+            errors.push(`${acc.phone}: no proxy for ${country}`);
             continue;
           }
           assigned++;
@@ -516,15 +509,34 @@ async function main() {
         sanitizeProxies(await ProxyModel.find().sort({ createdAt: -1 }).lean()),
       );
 
+      r.get('/proxies/:id', async (req, reply) => {
+        const params = validate(reply, idParams, req.params, 'params');
+        if (!params) return;
+        const proxy = await ProxyModel.findById(params.id).lean();
+        if (!proxy) return reply.code(404).send({ error: 'not found' });
+        return sanitizeProxy(proxy);
+      });
+
       r.post('/proxies', async (req, reply) => {
         const body = validate(reply, proxyCreateBody, req.body);
         if (!body) return;
-        const fromLink = body.type === 'mtproto' ? tryParseTelegramProxyLink(body.host) : null;
+        if (body.type === 'mtproto') {
+          const c = coerceMtProxyImportFields({
+            host: body.host,
+            port: body.port,
+            secret: body.secret ?? '',
+          });
+          const created = await ProxyModel.create({
+            ...body,
+            host: c.host,
+            port: c.port,
+            secret: c.secret,
+            country: (body.country ?? '').trim().toUpperCase(),
+          });
+          return sanitizeProxy(created);
+        }
         const created = await ProxyModel.create({
           ...body,
-          host: fromLink?.host ?? body.host,
-          port: fromLink?.port ?? body.port,
-          secret: body.type === 'mtproto' ? (fromLink?.secret ?? body.secret ?? '').trim() : '',
           country: (body.country ?? '').trim().toUpperCase(),
         });
         return sanitizeProxy(created);
@@ -535,14 +547,32 @@ async function main() {
         if (!params) return;
         const body = validate(reply, proxyPatchBody, req.body);
         if (!body) return;
+        const existing = await ProxyModel.findById(params.id).lean();
+        if (!existing) return reply.code(404).send({ error: 'not found' });
         const patch: Record<string, unknown> = { ...body };
         const effectiveType = typeof body.type === 'string' ? body.type : undefined;
-        if (typeof body.host === 'string' && (effectiveType === 'mtproto' || effectiveType == null)) {
-          const fromLink = tryParseTelegramProxyLink(body.host);
-          if (fromLink) {
-            patch.host = fromLink.host;
-            patch.port = fromLink.port;
-            if (!body.secret) patch.secret = fromLink.secret;
+        const effType = (effectiveType ?? existing.type) as string;
+        if (
+          effType === 'mtproto' &&
+          (body.host !== undefined || body.port !== undefined || body.secret !== undefined)
+        ) {
+          const host = typeof body.host === 'string' ? body.host : String(existing.host ?? '');
+          const port = body.port !== undefined ? body.port : Number(existing.port ?? 443);
+          const secret = body.secret !== undefined ? String(body.secret) : String(existing.secret ?? '');
+          const c = coerceMtProxyImportFields({ host, port, secret });
+          patch.host = c.host;
+          patch.port = c.port;
+          patch.secret = c.secret;
+        } else if (typeof body.host === 'string' && effType !== 'mtproto') {
+          const h = body.host.trim();
+          const lastColon = h.lastIndexOf(':');
+          if (lastColon > 0 && !h.includes('://') && !h.includes('/') && !h.includes('?')) {
+            const tail = h.slice(lastColon + 1);
+            const p = Number.parseInt(tail, 10);
+            if (/^\d+$/.test(tail) && Number.isInteger(p) && p > 0 && p <= 65535) {
+              patch.host = h.slice(0, lastColon).trim();
+              patch.port = p;
+            }
           }
         }
         if (effectiveType && effectiveType !== 'mtproto') {

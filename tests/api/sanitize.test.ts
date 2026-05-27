@@ -79,7 +79,7 @@ describe('sanitizeAccounts', () => {
 });
 
 describe('sanitizeProxy', () => {
-  it('strips secret/login/password and emits presence flags', () => {
+  it('keeps secret/login/password and emits presence flags', () => {
     const out = sanitizeProxy({
       _id: 'p1',
       label: 'mtproto-1',
@@ -90,9 +90,9 @@ describe('sanitizeProxy', () => {
       login: 'user',
       password: 'pass',
     });
-    expect(out!.secret).toBeUndefined();
-    expect(out!.login).toBeUndefined();
-    expect(out!.password).toBeUndefined();
+    expect(out!.secret).toBe('feedface');
+    expect(out!.login).toBe('user');
+    expect(out!.password).toBe('pass');
     expect(out!.hasSecret).toBe(true);
     expect(out!.hasLogin).toBe(true);
     expect(out!.hasPassword).toBe(true);
@@ -114,7 +114,7 @@ describe('sanitizeProxies', () => {
       { host: 'h2', port: 443 },
     ]);
     expect(out).toHaveLength(2);
-    expect(out[0]!.secret).toBeUndefined();
+    expect(out[0]!.secret).toBe('s');
     expect(out[0]!.hasSecret).toBe(true);
     expect(out[1]!.hasSecret).toBe(false);
   });

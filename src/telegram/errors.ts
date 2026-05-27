@@ -235,7 +235,8 @@ export function mapTgError(err: unknown): TgDomainError {
   // Heuristic: network errors
   if (
     /ECONN|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|EHOSTUNREACH|ENETUNREACH/i.test(raw) ||
-    /INCOMPLETEREADERROR|SERVER CLOSED THE CONNECTION|PROXY CLOSED THE CONNECTION/i.test(upper) ||
+    /INCOMPLETEREADERROR|INCOMPLETEREAD|SERVER CLOSED THE CONNECTION|PROXY CLOSED THE CONNECTION/i.test(upper) ||
+    /BYTES READ ON A TOTAL OF \d+/i.test(upper) ||
     /FAKETLS SERVER HELLO VERIFICATION FAILED|INVALID SERVER DIGEST/i.test(upper) ||
     upper.includes('TIMEOUT') ||
     upper.includes('CONNECTION')
@@ -244,7 +245,7 @@ export function mapTgError(err: unknown): TgDomainError {
       kind: 'network',
       code: 'NETWORK',
       message:
-        /INCOMPLETEREADERROR|SERVER CLOSED THE CONNECTION|PROXY CLOSED THE CONNECTION|FAKETLS SERVER HELLO VERIFICATION FAILED|INVALID SERVER DIGEST/i.test(
+        /INCOMPLETEREADERROR|INCOMPLETEREAD|SERVER CLOSED THE CONNECTION|PROXY CLOSED THE CONNECTION|FAKETLS SERVER HELLO VERIFICATION FAILED|INVALID SERVER DIGEST|BYTES READ ON A TOTAL OF/i.test(
           upper,
         )
           ? `Network/proxy transport failure: ${raw}. Check MTProxy host/port/secret, and for ee FakeTLS secrets verify the domain payload matches the proxy endpoint.`

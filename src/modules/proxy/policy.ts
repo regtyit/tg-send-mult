@@ -2,25 +2,27 @@ import type { ProxyDoc } from '../../db/models/Proxy';
 import { TgDomainError } from '../../telegram/errors';
 import { phoneCountryIso2 } from '../accounts/phoneCountry';
 
+const TELEGRAM_PROXY_TYPES = ['mtproto', 'socks5', 'http'] as const;
+
 /**
  * Enforces Telegram access policy:
- * - Every Telegram task must use MTProxy
- * - MTProxy exit country must match account phone country
+ * - Every Telegram task must use a proxy (MTProto, SOCKS5, or HTTP)
+ * - Proxy exit country must match account phone country when set on the proxy
  */
-export function assertMtProxyPolicy(account: { phone: string }, proxy: ProxyDoc | null): void {
+export function assertTelegramProxyPolicy(account: { phone: string }, proxy: ProxyDoc | null): void {
   if (!proxy) {
     throw new TgDomainError({
       kind: 'proxy_invalid',
-      code: 'MTPROXY_REQUIRED',
-      message: 'Telegram task requires MTProxy, but account has no proxy assigned',
+      code: 'PROXY_REQUIRED',
+      message: 'Telegram task requires a proxy, but account has none assigned',
     });
   }
 
-  if (proxy.type !== 'mtproto') {
+  if (!TELEGRAM_PROXY_TYPES.includes(proxy.type as (typeof TELEGRAM_PROXY_TYPES)[number])) {
     throw new TgDomainError({
       kind: 'proxy_invalid',
-      code: 'MTPROXY_REQUIRED',
-      message: `Telegram task requires MTProxy, got ${proxy.type}`,
+      code: 'PROXY_TYPE_INVALID',
+      message: `Unsupported proxy type: ${proxy.type}`,
     });
   }
 
@@ -50,3 +52,6 @@ export function assertMtProxyPolicy(account: { phone: string }, proxy: ProxyDoc 
     });
   }
 }
+
+/** @deprecated Use {@link assertTelegramProxyPolicy} */
+export const assertMtProxyPolicy = assertTelegramProxyPolicy;

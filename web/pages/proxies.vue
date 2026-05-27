@@ -31,7 +31,14 @@
           <v-text-field v-model="label" label="Label" variant="outlined" density="comfortable" />
         </v-col>
         <v-col cols="12" md="3">
-          <v-text-field v-model="host" label="Host" variant="outlined" density="comfortable" />
+          <v-text-field
+            v-model="host"
+            label="Host"
+            :hint="type === 'mtproto' ? 'IP/hostname, or paste t.me / tg:// proxy link (e.g. from QR)' : undefined"
+            :persistent-hint="type === 'mtproto'"
+            variant="outlined"
+            density="comfortable"
+          />
         </v-col>
         <v-col cols="12" md="2">
           <v-text-field v-model="port" label="Port" variant="outlined" density="comfortable" />
@@ -40,7 +47,12 @@
           <v-text-field v-model="country" label="Country (ISO2)" variant="outlined" density="comfortable" />
         </v-col>
         <v-col cols="12" md="2" v-if="type === 'mtproto'">
-          <v-text-field v-model="secret" label="Secret (optional)" variant="outlined" density="comfortable" />
+          <v-text-field
+            v-model="secret"
+            label="Secret (optional if link in Host)"
+            variant="outlined"
+            density="comfortable"
+          />
         </v-col>
         <v-col cols="12" md="2" v-if="type !== 'mtproto'">
           <v-text-field v-model="login" label="Login (optional)" variant="outlined" density="comfortable" />
@@ -54,12 +66,21 @@
           />
         </v-col>
       </v-row>
-      <v-btn color="primary" :loading="saving" :disabled="saving" @click="addProxy">Add proxy</v-btn>
+      <div class="d-flex flex-wrap ga-2 align-center">
+        <v-btn color="primary" :loading="saving" :disabled="saving" @click="addProxy">Add proxy</v-btn>
+        <template v-if="type === 'mtproto'">
+          <v-btn variant="tonal" size="small" :disabled="saving" @click="pasteMtprotoFromClipboard">
+            Paste link / QR text
+          </v-btn>
+          <v-btn variant="tonal" size="small" :disabled="saving" @click="pickQrImage">Decode QR image</v-btn>
+          <input ref="qrFileInput" type="file" accept="image/*" class="d-none" @change="onQrImageSelected" />
+        </template>
+      </div>
     </v-card>
 
     <BulkImportPanel
       title="Bulk import proxies"
-      hint="CSV/JSON columns: label, type (mtproto|socks5|http), host, port, country, secret, login, password"
+      hint="CSV/JSON: label, type (mtproto|socks5|http), host, port, country, secret, login, password. MTProto: paste t.me/proxy?… in host or secret, or host as host:port; classic 16-byte keys are 32 hex chars (even if they start with ee)."
       button-label="Import proxies"
       :loading="bulkImporting"
       :result-summary="bulkImportSummary"
@@ -187,10 +208,22 @@
               <v-text-field v-model="editCountry" label="Country (ISO2)" variant="outlined" density="comfortable" />
             </v-col>
             <v-col cols="12" md="4" v-if="editType === 'mtproto'">
-              <v-text-field v-model="editSecret" label="Secret" variant="outlined" density="comfortable" />
+              <v-text-field
+                v-model="editSecret"
+                label="Secret"
+                hint="Saved on this proxy (also returned in the table API)."
+                persistent-hint
+                variant="outlined"
+                density="comfortable"
+              />
             </v-col>
             <v-col cols="12" md="4" v-if="editType !== 'mtproto'">
-              <v-text-field v-model="editLogin" label="Login (optional)" variant="outlined" density="comfortable" />
+              <v-text-field
+                v-model="editLogin"
+                label="Login (optional)"
+                variant="outlined"
+                density="comfortable"
+              />
             </v-col>
             <v-col cols="12" md="4" v-if="editType !== 'mtproto'">
               <v-text-field
@@ -202,7 +235,16 @@
             </v-col>
           </v-row>
         </v-card-text>
-        <v-card-actions>
+        <v-card-actions class="flex-wrap ga-2">
+          <v-btn
+            v-if="editType === 'mtproto'"
+            variant="tonal"
+            size="small"
+            :disabled="editing"
+            @click="pasteMtprotoEditFromClipboard"
+          >
+            Paste link / QR text
+          </v-btn>
           <v-spacer />
           <v-btn variant="text" @click="editOpen = false">Cancel</v-btn>
           <v-btn color="primary" :loading="editing" @click="saveEdit">Save</v-btn>
@@ -213,6 +255,7 @@
 </template>
 
 <script setup lang="ts">
+import { coerceMtProxyImportFields, tryParseTelegramProxyLink } from '@repo/telegram/proxyPayload';
 import { errorText } from '~/composables/useToast';
 import { DATA_TABLE_CLASS, fixedCol } from '~/utils/tableColumns';
 
@@ -232,6 +275,8 @@ interface ProxyRow {
   port: number;
   country?: string;
   secret?: string;
+  login?: string;
+  password?: string;
   hasSecret?: boolean;
   hasLogin?: boolean;
   hasPassword?: boolean;
@@ -272,6 +317,110 @@ const bulkImporting = ref(false);
 const bulkImportSummary = ref('');
 const testAfterImport = ref(false);
 const testingAll = ref(false);
+const qrFileInput = ref<HTMLInputElement | null>(null);
+
+function applyCoerceToAddForm(): { host: string; port: number; secret: string } | null {
+  if (type.value !== 'mtproto') return null;
+  const portNum = Number.parseInt(port.value, 10);
+  const c = coerceMtProxyImportFields({
+    host: host.value.trim(),
+    port: Number.isFinite(portNum) && portNum > 0 ? portNum : 443,
+    secret: secret.value.trim(),
+  });
+  host.value = c.host;
+  port.value = String(c.port);
+  secret.value = c.secret;
+  return c;
+}
+
+async function pasteMtprotoFromClipboard(): Promise<void> {
+  try {
+    const text = (await navigator.clipboard.readText()).trim();
+    if (!text) {
+      toast.warning('Clipboard is empty.');
+      return;
+    }
+    type.value = 'mtproto';
+    if (tryParseTelegramProxyLink(text)) {
+      host.value = text;
+      secret.value = '';
+    } else {
+      secret.value = text;
+    }
+    applyCoerceToAddForm();
+    toast.success('Filled from clipboard. Review host/port/secret, then Add proxy.');
+  } catch {
+    toast.error('Could not read clipboard (permission denied?). Paste into Host manually.');
+  }
+}
+
+function pickQrImage(): void {
+  qrFileInput.value?.click();
+}
+
+async function onQrImageSelected(ev: Event): Promise<void> {
+  const input = ev.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = '';
+  if (!file) return;
+  type.value = 'mtproto';
+  const W = typeof window !== 'undefined' ? (window as unknown as { BarcodeDetector?: new (o: { formats: string[] }) => { detect: (img: ImageBitmap) => Promise<Array<{ rawValue: string }>> } }) : {};
+  const BD = W.BarcodeDetector;
+  if (!BD) {
+    toast.error('QR image decode needs a browser with BarcodeDetector (e.g. Chrome). Use “Paste link / QR text”.');
+    return;
+  }
+  try {
+    const bmp = await createImageBitmap(file);
+    const detector = new BD({ formats: ['qr_code'] });
+    const codes = await detector.detect(bmp);
+    const raw = codes[0]?.rawValue?.trim();
+    if (!raw) {
+      toast.warning('No QR code found in that image.');
+      return;
+    }
+    if (tryParseTelegramProxyLink(raw)) {
+      host.value = raw;
+      secret.value = '';
+    } else {
+      host.value = '';
+      secret.value = raw;
+    }
+    applyCoerceToAddForm();
+    toast.success('Decoded QR. Review fields, then Add proxy.');
+  } catch (e) {
+    toast.error(errorText(e));
+  }
+}
+
+async function pasteMtprotoEditFromClipboard(): Promise<void> {
+  try {
+    const text = (await navigator.clipboard.readText()).trim();
+    if (!text) {
+      toast.warning('Clipboard is empty.');
+      return;
+    }
+    editType.value = 'mtproto';
+    if (tryParseTelegramProxyLink(text)) {
+      editHost.value = text;
+      editSecret.value = '';
+    } else {
+      editSecret.value = text;
+    }
+    const portNum = Number.parseInt(editPort.value, 10);
+    const c = coerceMtProxyImportFields({
+      host: editHost.value.trim(),
+      port: Number.isFinite(portNum) && portNum > 0 ? portNum : 443,
+      secret: editSecret.value.trim(),
+    });
+    editHost.value = c.host;
+    editPort.value = String(c.port);
+    editSecret.value = c.secret;
+    toast.success('Filled from clipboard. Save when ready.');
+  } catch {
+    toast.error('Could not read clipboard.');
+  }
+}
 
 const headers = [
   fixedCol('Label', 'label', 100),
@@ -326,22 +475,44 @@ async function load(): Promise<void> {
 }
 
 async function addProxy(): Promise<void> {
-  const portNum = Number.parseInt(port.value, 10);
-  if (!host.value.trim() || !Number.isFinite(portNum) || portNum <= 0 || portNum > 65535) {
+  let portNum = Number.parseInt(port.value, 10);
+  let hostTrim = host.value.trim();
+  let secretTrim = secret.value.trim();
+
+  if (type.value === 'mtproto') {
+    const c = coerceMtProxyImportFields({
+      host: hostTrim,
+      port: Number.isFinite(portNum) && portNum > 0 ? portNum : 443,
+      secret: secretTrim,
+    });
+    hostTrim = c.host;
+    portNum = c.port;
+    secretTrim = c.secret;
+    host.value = c.host;
+    port.value = String(c.port);
+    secret.value = c.secret;
+  }
+
+  if (!hostTrim || !Number.isFinite(portNum) || portNum <= 0 || portNum > 65535) {
     toast.warning('Provide a valid host and a port between 1 and 65535.');
     return;
   }
+  if (type.value === 'mtproto' && !secretTrim) {
+    toast.warning('MTProto needs a secret: paste the full proxy link (t.me or tg://) from QR, or the hex secret.');
+    return;
+  }
+
   saving.value = true;
   try {
     await apiFetch('/api/proxies', {
       method: 'POST',
       body: JSON.stringify({
-        label: label.value.trim() || `mtproto-${host.value.trim()}:${portNum}`,
+        label: label.value.trim() || `mtproto-${hostTrim}:${portNum}`,
         type: type.value,
-        host: host.value.trim(),
+        host: hostTrim,
         port: portNum,
         country: country.value.trim().toUpperCase(),
-        secret: type.value === 'mtproto' ? secret.value.trim() : undefined,
+        secret: type.value === 'mtproto' ? secretTrim : undefined,
         login: type.value !== 'mtproto' ? login.value.trim() : undefined,
         password: type.value !== 'mtproto' ? password.value.trim() : undefined,
       }),
@@ -406,9 +577,9 @@ function openEdit(item: ProxyRow): void {
   editHost.value = item.host || '';
   editPort.value = String(item.port || 443);
   editCountry.value = item.country || '';
-  editSecret.value = '';
-  editLogin.value = '';
-  editPassword.value = '';
+  editSecret.value = (item.secret ?? '').trim();
+  editLogin.value = (item.login ?? '').trim();
+  editPassword.value = (item.password ?? '').trim();
   editOpen.value = true;
 }
 
@@ -419,17 +590,38 @@ async function saveEdit(): Promise<void> {
     toast.warning('Provide a valid host and port.');
     return;
   }
+
+  let hostTrim = editHost.value.trim();
+  let portOut = portNum;
+  let secretForMt: string | undefined;
+
+  if (editType.value === 'mtproto') {
+    const linkInHost = tryParseTelegramProxyLink(hostTrim) !== null;
+    const secTrim = editSecret.value.trim();
+    const linkInSecret = tryParseTelegramProxyLink(secTrim) !== null;
+    if (linkInHost || linkInSecret || secTrim.length > 0) {
+      const c = coerceMtProxyImportFields({
+        host: hostTrim,
+        port: portOut,
+        secret: secTrim,
+      });
+      hostTrim = c.host;
+      portOut = c.port;
+      secretForMt = c.secret;
+    }
+  }
+
   editing.value = true;
   try {
     await apiFetch(`/api/proxies/${id}`, {
       method: 'PATCH',
       body: JSON.stringify({
         type: editType.value,
-        label: editLabel.value.trim() || `mtproto-${editHost.value.trim()}:${portNum}`,
-        host: editHost.value.trim(),
-        port: portNum,
+        label: editLabel.value.trim() || `mtproto-${hostTrim}:${portOut}`,
+        host: hostTrim,
+        port: portOut,
         country: editCountry.value.trim().toUpperCase(),
-        ...(editType.value === 'mtproto' && editSecret.value.trim() ? { secret: editSecret.value.trim() } : {}),
+        ...(editType.value === 'mtproto' && secretForMt !== undefined ? { secret: secretForMt } : {}),
         ...(editType.value !== 'mtproto' && editLogin.value.trim() ? { login: editLogin.value.trim() } : {}),
         ...(editType.value !== 'mtproto' && editPassword.value.trim()
           ? { password: editPassword.value.trim() }

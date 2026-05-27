@@ -1,6 +1,6 @@
 import { ProxyModel } from '../../db/models';
 import type { ProxyDoc } from '../../db/models/Proxy';
-import { tryParseTelegramProxyLink } from '../../telegram/proxyPayload';
+import { coerceMtProxyImportFields, proxyDocToTelethonPayload } from '../../telegram/proxyPayload';
 import { parseBulkInput } from '../import/parseBulk';
 
 export interface ProxyImportRow extends Record<string, unknown> {
@@ -74,14 +74,28 @@ export async function importProxiesFromBulk(input: {
       continue;
     }
 
-    const fromLink = tryParseTelegramProxyLink(host) ?? tryParseTelegramProxyLink(secret);
-    if (fromLink) {
-      host = fromLink.host;
-      port = fromLink.port;
-      if (!secret) secret = fromLink.secret;
+    if (typeRaw === 'mtproto') {
+      const c = coerceMtProxyImportFields({
+        host,
+        port: Number.isInteger(port) && port > 0 ? port : 443,
+        secret: secret || '',
+      });
+      host = c.host;
+      port = c.port;
+      secret = c.secret;
+    } else if (!host.includes('://') && !host.includes('/') && !host.includes('?')) {
+      const lastColon = host.lastIndexOf(':');
+      if (lastColon > 0) {
+        const tail = host.slice(lastColon + 1);
+        const p = Number.parseInt(tail, 10);
+        if (/^\d+$/.test(tail) && Number.isInteger(p) && p > 0 && p <= 65535) {
+          host = host.slice(0, lastColon).trim();
+          port = p;
+        }
+      }
     }
 
-    if (!host || !Number.isInteger(port) || port <= 0) {
+    if (!host || !Number.isInteger(port) || port <= 0 || port > 65535) {
       failed++;
       results.push({ line, ok: false, label, error: 'invalid host/port' });
       continue;
@@ -105,6 +119,9 @@ export async function importProxiesFromBulk(input: {
         login: login || '',
         password: password || '',
       };
+      if (typeRaw === 'mtproto') {
+        proxyDocToTelethonPayload(payload as ProxyDoc);
+      }
       if (existing) {
         await ProxyModel.updateOne({ _id: existing._id }, { $set: payload });
         imported++;

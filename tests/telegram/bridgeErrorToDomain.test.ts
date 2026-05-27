@@ -88,6 +88,15 @@ describe('bridgeErrorToDomain', () => {
     expect(e.retryable).toBe(true);
   });
 
+  it('classifies IncompleteRead / bytes-read mismatch as retryable network', () => {
+    const e = bridgeErrorToDomain({
+      code: 'INCOMPLETEREADERROR',
+      message: '0 bytes read on a total of 138 expected bytes',
+    });
+    expect(e.kind).toBe('network');
+    expect(e.retryable).toBe(true);
+  });
+
   it('classifies FakeTLS digest mismatch as retryable network failure', () => {
     const e = bridgeErrorToDomain({
       code: 'EXCEPTION',

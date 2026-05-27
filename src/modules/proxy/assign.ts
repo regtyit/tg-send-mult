@@ -4,53 +4,21 @@ import type { AccountDoc } from '../../db/models/Account';
 import type { ProxyDoc } from '../../db/models/Proxy';
 import { phoneCountryIso2 } from '../accounts/phoneCountry';
 import { TgDomainError } from '../../telegram/errors';
-import { assertMtProxyPolicy } from './policy';
-
-export async function ensureProxyNotUsedByAnotherAccount(
-  proxyId: string,
-  accountId: string,
-): Promise<void> {
-  const conflict = await AccountModel.findOne({
-    _id: { $ne: new Types.ObjectId(accountId) },
-    proxyId: new Types.ObjectId(proxyId),
-  })
-    .select('_id phone')
-    .lean();
-  if (conflict) {
-    throw new Error(`MTProxy already assigned to another account: ${conflict.phone}`);
-  }
-}
-
-async function usedProxyIdsExcept(accountId: Types.ObjectId): Promise<Types.ObjectId[]> {
-  const used = await AccountModel.find({
-    _id: { $ne: accountId },
-    proxyId: { $ne: null },
-  })
-    .select('proxyId')
-    .lean();
-  return used
-    .map((x) => (x.proxyId ? new Types.ObjectId(String(x.proxyId)) : null))
-    .filter((x): x is Types.ObjectId => x !== null);
-}
+import { assertTelegramProxyPolicy } from './policy';
 
 /**
- * Free MTProxies for the account phone country, best health first.
- * Optionally puts `preferProxyId` first when it is valid for that country.
+ * Proxies matching the account phone country, best health first.
+ * Multiple accounts may use the same proxy; `preferProxyId` is moved to the front when valid.
  */
 export async function listMtProxiesForPhoneCountry(
   phone: string,
-  accountId: Types.ObjectId,
+  _accountId: Types.ObjectId,
   preferProxyId?: string | null,
 ): Promise<ProxyDoc[]> {
   const country = phoneCountryIso2(phone);
   if (!country) return [];
 
-  const usedIds = await usedProxyIdsExcept(accountId);
-  const query = {
-    type: 'mtproto' as const,
-    country,
-    ...(usedIds.length ? { _id: { $nin: usedIds } } : {}),
-  };
+  const query = { country };
 
   const available = await ProxyModel.find(query).sort({ healthScore: -1, createdAt: 1 });
   if (!preferProxyId?.trim()) return available;
@@ -60,7 +28,6 @@ export async function listMtProxiesForPhoneCountry(
     available.find((p) => String(p._id) === preferredId) ??
     (await ProxyModel.findOne({
       _id: new Types.ObjectId(preferredId),
-      type: 'mtproto',
       country,
     }));
   if (!preferred) return available;
@@ -70,41 +37,26 @@ export async function listMtProxiesForPhoneCountry(
 }
 
 /**
- * Atomically claim an unused MTProxy (type mtproto) for the account country.
+ * Assign a proxy for the account country (any type: mtproto, socks5, http).
+ * Multiple accounts may share the same proxy.
  */
 export async function claimMtProxyForAccount(
   accountId: Types.ObjectId,
   country: string,
 ): Promise<string | null> {
   const upper = country.toUpperCase();
-  const MAX_ATTEMPTS = 8;
+  const candidate = await ProxyModel.findOne({ country: upper })
+    .sort({ healthScore: -1, createdAt: 1 })
+    .select('_id')
+    .lean();
+  if (!candidate?._id) return null;
 
-  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
-    const usedIds = await usedProxyIdsExcept(accountId);
-    const candidate = await ProxyModel.findOne({
-      type: 'mtproto',
-      country: upper,
-      ...(usedIds.length ? { _id: { $nin: usedIds } } : {}),
-    })
-      .sort({ healthScore: -1, createdAt: 1 })
-      .select('_id')
-      .lean();
-    if (!candidate?._id) return null;
-
-    const stillFree = await AccountModel.exists({
-      _id: { $ne: accountId },
-      proxyId: candidate._id,
-    });
-    if (stillFree) continue;
-
-    const updated = await AccountModel.findOneAndUpdate(
-      { _id: accountId },
-      { $set: { proxyId: candidate._id } },
-      { new: true },
-    );
-    if (updated) return String(candidate._id);
-    return null;
-  }
+  const updated = await AccountModel.findOneAndUpdate(
+    { _id: accountId },
+    { $set: { proxyId: candidate._id } },
+    { new: true },
+  );
+  if (updated) return String(candidate._id);
   return null;
 }
 
@@ -125,8 +77,8 @@ export function isTransportProxyError(err: unknown): boolean {
 }
 
 /**
- * Assign MTProxy on the account and run `connect` — tries each free in-country
- * MTProxy on transport failures (dead proxy, wrong secret, etc.).
+ * Assign a proxy on the account and run `connect` — tries each in-country
+ * proxy on transport failures (dead proxy, wrong secret, etc.).
  */
 export async function connectAccountViaMtProxies(
   account: AccountDoc,
@@ -152,8 +104,8 @@ export async function connectAccountViaMtProxies(
   if (!toTry.length) {
     throw new TgDomainError({
       kind: 'proxy_invalid',
-      code: 'NO_MTPROXY',
-      message: `No free MTProxy for country ${country}. Add MTProto proxies with country=${country} on the Proxies page.`,
+      code: 'NO_PROXY',
+      message: `No proxy for country ${country}. Add proxies with country=${country} on the Proxies page.`,
       retryable: false,
     });
   }
@@ -163,28 +115,20 @@ export async function connectAccountViaMtProxies(
 
   for (const proxy of toTry) {
     try {
-      try {
-        await ensureProxyNotUsedByAnotherAccount(String(proxy._id), String(account._id));
-      } catch (conflictErr) {
-        if (conflictErr instanceof Error && conflictErr.message.includes('already assigned')) {
-          continue;
-        }
-        throw conflictErr;
-      }
-      assertMtProxyPolicy(account, proxy);
+      assertTelegramProxyPolicy(account, proxy);
       const updated = await AccountModel.findByIdAndUpdate(
         account._id,
         { $set: { proxyId: proxy._id } },
         { new: true },
       );
       if (!updated) {
-        throw new Error(`Account ${account._id} not found while assigning MTProxy`);
+        throw new Error(`Account ${account._id} not found while assigning proxy`);
       }
       await connect(updated, proxy);
       return updated;
     } catch (err) {
       lastErr = err;
-      tried.push(`${proxy.host}:${proxy.port}`);
+      tried.push(`${proxy.type} ${proxy.host}:${proxy.port}`);
       if (!isTransportProxyError(err)) throw err;
     }
   }
@@ -195,8 +139,8 @@ export async function connectAccountViaMtProxies(
     kind: 'network',
     code: 'NETWORK',
     message:
-      `Connection to Telegram failed via ${tried.length} MTProxy(s) (${tried.join(', ')}). ` +
-      `Last error: ${detail}. Check proxy host/port/secret on the Proxies page and run Test.`,
+      `Connection to Telegram failed via ${tried.length} proxy/proxies (${tried.join(', ')}). ` +
+      `Last error: ${detail}. Check proxy settings on the Proxies page and run Test.`,
     retryable: true,
   });
 }

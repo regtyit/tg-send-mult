@@ -93,6 +93,44 @@ export function normalizeMtProxySecret(raw: string): string {
   return cleaned;
 }
 
+/**
+ * Normalize host/port/secret when importing from CSV, API, or CLI (share links,
+ * stray whitespace, `host:port` in the host column).
+ */
+export function coerceMtProxyImportFields(opts: {
+  host: string;
+  port: number;
+  secret: string;
+}): { host: string; port: number; secret: string } {
+  let host = opts.host.trim();
+  let port = opts.port;
+  let secret = opts.secret.trim();
+
+  const fromLink = tryParseTelegramProxyLink(host) ?? tryParseTelegramProxyLink(secret);
+  if (fromLink) {
+    return {
+      host: fromLink.host,
+      port: fromLink.port,
+      secret: normalizeMtProxySecret(fromLink.secret),
+    };
+  }
+
+  // `host:port` in one field (no URL scheme) — common CSV mistake.
+  if (!host.includes('://') && !host.includes('/') && !host.includes('?')) {
+    const lastColon = host.lastIndexOf(':');
+    if (lastColon > 0) {
+      const tail = host.slice(lastColon + 1);
+      const p = Number.parseInt(tail, 10);
+      if (/^\d+$/.test(tail) && Number.isInteger(p) && p > 0 && p <= 65535) {
+        host = host.slice(0, lastColon).trim();
+        port = p;
+      }
+    }
+  }
+
+  return { host, port, secret: normalizeMtProxySecret(secret) };
+}
+
 export function proxyDocToTelethonPayload(proxy: ProxyDoc | null | undefined): TelethonProxyPayload {
   if (!proxy) return { type: 'none' };
   if (proxy.type === 'socks5' || proxy.type === 'http') {

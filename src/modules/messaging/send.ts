@@ -30,7 +30,7 @@ export async function sendText(
     });
   }
   /**
-   * Enforce the MTProxy/country policy at send-time too. Without this an
+   * Enforce the proxy/country policy at send-time too. Without this an
    * account whose proxy was un-assigned (or whose phone country no longer
    * matches its assigned proxy) would still try to dispatch over a wrong-
    * country exit, which is exactly what triggers Telegram's anti-abuse

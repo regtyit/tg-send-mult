@@ -43,7 +43,7 @@ const router = useRouter();
 
 const navInternal = [
   { title: 'Senders', to: '/accounts' },
-  { title: 'MTProto', to: '/proxies' },
+  { title: 'Proxies', to: '/proxies' },
   { title: 'Contacts', to: '/contacts' },
   { title: 'Templates', to: '/templates' },
   { title: 'Campaigns', to: '/campaigns' },

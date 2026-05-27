@@ -33,7 +33,7 @@ import { syncInboundRepliesForAccount } from '../../modules/messaging/syncInboun
 import { testProxy } from '../../modules/proxy/test';
 import { ensureContactForTestRecipient } from '../../modules/contacts/testRecipient';
 import { rollbackNewAccountOnVerifyFail } from '../../modules/auth/rollbackAccount';
-import { tryParseTelegramProxyLink } from '../../telegram/proxyPayload';
+import { coerceMtProxyImportFields } from '../../telegram/proxyPayload';
 
 const program = new Command();
 program.name('tg').description('Telegram bulk sender CLI').version('0.1.0');
@@ -383,19 +383,10 @@ program
         let host = String(opts.host).trim();
         let port = Number(opts.port);
         let secret = String(opts.secret ?? '').trim();
-
-        const fromHost = tryParseTelegramProxyLink(host);
-        if (fromHost) {
-          host = fromHost.host;
-          port = fromHost.port;
-          if (!secret) secret = fromHost.secret;
-        }
-        const fromSecret = tryParseTelegramProxyLink(secret);
-        if (fromSecret) {
-          host = fromSecret.host;
-          port = fromSecret.port;
-          secret = fromSecret.secret;
-        }
+        const c = coerceMtProxyImportFields({ host, port, secret });
+        host = c.host;
+        port = c.port;
+        secret = c.secret;
 
         const country = String(opts.country ?? '')
           .trim()

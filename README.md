@@ -14,7 +14,7 @@
 | **Campaign engine** | Pick senders, audience (tags or explicit contacts), and a template; start/pause/resume from the dashboard or CLI. |
 | **Sticky sender binding** | Once a contact receives mail from sender A, later campaigns reuse A for that contact (when A is in the pool). |
 | **Cross-campaign dedup** | The same text is never sent twice to the same recipient, even across different campaigns. |
-| **Per-account proxies** | MTProxy (incl. FakeTLS), SOCKS5, or direct; one proxy per sender, with optional auto-assign by phone country. |
+| **Per-account proxies** | MTProxy (incl. FakeTLS), SOCKS5, or HTTP; several senders may share one proxy, with optional auto-assign by phone country. |
 | **Anti-limit pacing** | Daily caps, hourly rates, sending windows, lognormal jitter, warm-up status, health scores, flood-wait backoff. |
 | **Delivery verification** | Mark accounts as `test_recipient`, sync their inbox, and confirm campaign messages actually arrived. |
 | **Web dashboard** | Senders, proxies, contacts, templates, campaigns, **dialogs** — plus BullMQ queue monitor. |
@@ -97,7 +97,7 @@ flowchart LR
 
    **Or Docker Compose** (API + worker + scheduler + Mongo + Valkey): see [docs/DOCKER.md](docs/DOCKER.md) → `npm run docker:start` → [http://127.0.0.1:3048](http://127.0.0.1:3048).
 
-5. **Add a sender** (CLI example — MTProxy required for Telegram actions):
+5. **Add a sender** (CLI example — a proxy is required for Telegram actions):
    ```bash
    npm run cli -- auth login --proxy-id <proxyId>
    npm run cli -- send-test --account <id> --to me --text "hello"

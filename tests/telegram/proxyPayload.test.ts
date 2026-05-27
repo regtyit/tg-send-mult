@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { normalizeMtProxySecret, proxyDocToTelethonPayload } from '../../src/telegram/proxyPayload';
+import { coerceMtProxyImportFields, normalizeMtProxySecret, proxyDocToTelethonPayload } from '../../src/telegram/proxyPayload';
 
 describe('normalizeMtProxySecret', () => {
   it('keeps classic 32-char secrets', () => {
@@ -54,6 +54,30 @@ describe('normalizeMtProxySecret', () => {
     expect(normalizeMtProxySecret(corrupted)).toBe(
       'ee49dc1068b452d2bf05d6e6028c74a4cd7765622e6d61782e7275',
     );
+  });
+});
+
+describe('coerceMtProxyImportFields', () => {
+  it('splits host:port when pasted as one CSV cell', () => {
+    const out = coerceMtProxyImportFields({
+      host: '31.76.240.187:443',
+      port: 9999,
+      secret: 'ee49dc1068b452d2bf05d6e6028c74a4',
+    });
+    expect(out.host).toBe('31.76.240.187');
+    expect(out.port).toBe(443);
+    expect(out.secret).toBe('ee49dc1068b452d2bf05d6e6028c74a4');
+  });
+
+  it('parses share link from host and overrides port', () => {
+    const out = coerceMtProxyImportFields({
+      host: 't.me/proxy?server=1.2.3.4&port=8888&secret=dd0000000000000000000000000000000000000000000000000000000000000000',
+      port: 443,
+      secret: '',
+    });
+    expect(out.host).toBe('1.2.3.4');
+    expect(out.port).toBe(8888);
+    expect(out.secret.startsWith('dd')).toBe(true);
   });
 });
 

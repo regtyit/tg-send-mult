@@ -6,15 +6,12 @@ import type { AccountDoc } from '../../db/models/Account';
 /**
  * Strip sensitive fields from API responses.
  *
- * The API used to return full Mongoose docs, which include encrypted session
- * blobs, Telegram api_hash, and proxy credentials. Even though the dashboard
- * is gated by Basic Auth, leaking these values into browser caches, log files,
- * or third-party requests is unnecessary.
+ * Account responses strip encrypted session blobs and `telegramApiHash`. Proxy
+ * rows keep `secret` / `login` / `password` (Basic Auth dashboard); presence
+ * flags are still added for convenience.
  *
  * Each sanitizer is shape-tolerant — it accepts plain objects (from `.lean()`),
- * Mongoose hydrated docs (via `toObject()`), and arrays of either. Fields are
- * replaced with a boolean presence flag so the UI can still display "session
- * attached" / "secret set" without the actual value.
+ * Mongoose hydrated docs (via `toObject()`), and arrays of either.
  */
 
 function plain(input: unknown): Record<string, unknown> | null {
@@ -26,7 +23,6 @@ function plain(input: unknown): Record<string, unknown> | null {
 }
 
 const ACCOUNT_SENSITIVE_FIELDS = ['sessionEnc', 'telegramApiHash'] as const;
-const PROXY_SENSITIVE_FIELDS = ['secret', 'login', 'password'] as const;
 
 function nonEmptyString(v: unknown): boolean {
   return typeof v === 'string' && v.length > 0;
@@ -102,9 +98,6 @@ export function sanitizeProxy(doc: unknown): Record<string, unknown> | null {
   out.hasSecret = nonEmptyString(obj.secret);
   out.hasLogin = nonEmptyString(obj.login);
   out.hasPassword = nonEmptyString(obj.password);
-  for (const key of PROXY_SENSITIVE_FIELDS) {
-    delete out[key];
-  }
   return out;
 }
 
