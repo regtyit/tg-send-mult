@@ -1,7 +1,7 @@
 import { parse } from 'csv-parse/sync';
 import { ContactModel } from '../../db/models';
 import type { ContactDoc } from '../../db/models/Contact';
-import { toE164 } from './normalize';
+import { normalizeUsername, parseContactIdentifier } from './identifier';
 
 export interface ImportRow {
   phone?: string;
@@ -23,10 +23,13 @@ function cleanText(v: unknown): string {
   return v.trim();
 }
 
-function normalizeUsername(v: string): string {
-  const u = v.trim().replace(/^@+/, '');
-  if (!/^[a-zA-Z][a-zA-Z0-9_]{3,31}$/.test(u)) return '';
-  return u.toLowerCase();
+function pickCell(row: ImportRow, keys: string[]): string {
+  const r = row as Record<string, unknown>;
+  for (const key of keys) {
+    const v = r[key];
+    if (typeof v === 'string' && v.trim()) return v.trim();
+  }
+  return '';
 }
 
 export interface ContactImportLineError {
@@ -45,17 +48,31 @@ export async function importContactsFromRows(
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i]!;
     const line = i + 2;
-    const raw =
-      (typeof row.phone === 'string' && row.phone) ||
-      (typeof row.Phone === 'string' && row.Phone) ||
-      (typeof row.PHONE === 'string' && row.PHONE) ||
-      '';
-    const usernameCandidate = normalizeUsername(
-      cleanText(row.username) || cleanText(row.Username) || cleanText(row.USERNAME),
-    );
-    const usernameFromPhone = raw.trim().startsWith('@') ? normalizeUsername(raw) : '';
-    const username = usernameCandidate || usernameFromPhone;
-    const e164 = username ? null : toE164(raw, opts.defaultCountry);
+    const phoneRaw = pickCell(row, ['phone', 'Phone', 'PHONE']);
+    const usernameRaw = pickCell(row, ['username', 'Username', 'USERNAME']);
+    const altRaw = pickCell(row, [
+      'recipient',
+      'Recipient',
+      'contact',
+      'Contact',
+      'identifier',
+      'Identifier',
+    ]);
+    let username = normalizeUsername(usernameRaw);
+    let e164: string | null = null;
+    if (phoneRaw) {
+      const parsed = parseContactIdentifier(phoneRaw, opts);
+      e164 = parsed.phoneE164;
+      if (!username) username = parsed.username;
+    } else if (altRaw) {
+      const parsed = parseContactIdentifier(altRaw, opts);
+      e164 = parsed.phoneE164;
+      if (!username) username = parsed.username;
+    } else if (usernameRaw) {
+      const parsed = parseContactIdentifier(usernameRaw, opts);
+      e164 = parsed.phoneE164;
+      if (!username) username = parsed.username;
+    }
     if (!e164 && !username) {
       invalid++;
       errors.push({ line, reason: 'missing phone or username' });
@@ -77,6 +94,12 @@ export async function importContactsFromRows(
           'phone',
           'Phone',
           'PHONE',
+          'recipient',
+          'Recipient',
+          'contact',
+          'Contact',
+          'identifier',
+          'Identifier',
           'firstName',
           'first_name',
           'lastName',

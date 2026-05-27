@@ -9,6 +9,8 @@ import { normalizePhoneE164 } from '../accounts/phoneCountry';
 export interface AccountBulkRow {
   phone?: string;
   Phone?: string;
+  username?: string;
+  Username?: string;
   label?: string;
   Label?: string;
   role?: string;
@@ -77,8 +79,9 @@ export async function bulkImportAccountsFromCsv(
     const row = rows[i]!;
     const line = i + 2;
     const phone = pick(row, 'phone', 'Phone');
+    const csvUsername = pick(row, 'username', 'Username');
     const sessionPath = pick(row, 'sessionPath', 'session_path');
-    const label = pick(row, 'label', 'Label');
+    const label = pick(row, 'label', 'Label') || csvUsername;
     const roleRaw = pick(row, 'role', 'Role').toLowerCase();
     const role = roleRaw === 'test_recipient' ? 'test_recipient' : 'sender';
     const proxyLabel = pick(row, 'proxyLabel', 'proxy_label');

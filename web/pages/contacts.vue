@@ -12,7 +12,8 @@
       <NuxtLink to="/accounts" class="text-primary">Senders</NuxtLink>).
     </p>
     <p class="text-caption text-medium-emphasis mb-4">
-      Import supports phone or Telegram username (for example in `phone` or `username` column: `@meow1502`).
+      Import supports phone or Telegram username in any of: <code>phone</code>, <code>username</code>, or
+      <code>recipient</code> — with or without <code>@</code> (e.g. <code>meow1502</code> or <code>+79991234567</code>).
     </p>
 
     <v-card class="mb-6 pa-4">
@@ -42,7 +43,7 @@
 
     <BulkImportPanel
       title="Import recipients (CSV / JSON)"
-      hint="Columns: phone, username, firstName, lastName, tags"
+      hint="One identifier per row: phone or @username (columns phone, username, or recipient). Optional: firstName, lastName, tags"
       button-label="Import"
       :loading="importing"
       :result-summary="importSummary"
@@ -219,6 +220,10 @@ async function load(): Promise<void> {
 const { running: polling, refresh } = usePolling(load, { intervalMs: 15000 });
 
 async function importBulk(payload: { csv?: string; json?: string }): Promise<void> {
+  if (!payload.csv?.trim() && !payload.json?.trim()) {
+    toast.warning('Paste or upload CSV/JSON first.');
+    return;
+  }
   importing.value = true;
   importSummary.value = '';
   try {
@@ -254,9 +259,11 @@ async function addOne(): Promise<void> {
     toast.warning('Enter phone or @username.');
     return;
   }
-  const row = token.startsWith('@')
-    ? { username: token, firstName: singleFirstName.value.trim(), tags: singleTags.value.trim() }
-    : { phone: token, firstName: singleFirstName.value.trim(), tags: singleTags.value.trim() };
+  const row = {
+    phone: token,
+    firstName: singleFirstName.value.trim(),
+    tags: singleTags.value.trim(),
+  };
   addingOne.value = true;
   try {
     const res = await apiFetch<{ upserted: number; invalid: number }>('/api/contacts/import', {

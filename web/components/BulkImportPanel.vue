@@ -33,6 +33,9 @@
     >
       {{ buttonLabel }}
     </v-btn>
+    <v-alert v-if="importBlocked" type="warning" variant="tonal" class="mt-3" density="compact">
+      {{ importBlocked }}
+    </v-alert>
     <v-alert v-if="resultSummary" type="info" variant="tonal" class="mt-3" density="compact">
       {{ resultSummary }}
     </v-alert>
@@ -71,13 +74,18 @@ async function onCsvFile(files: File | File[] | null): Promise<void> {
   csvText.value = await f.text();
 }
 
+const importBlocked = ref('');
+
 function emitImport(): void {
+  importBlocked.value = '';
   if (tab.value === 'json' && jsonText.value.trim()) {
     emit('import', { json: jsonText.value });
     return;
   }
   if (csvText.value.trim()) {
     emit('import', { csv: csvText.value });
+    return;
   }
+  importBlocked.value = 'Paste CSV/JSON or upload a file before importing.';
 }
 </script>

@@ -77,7 +77,7 @@
 
     <BulkImportPanel
       title="Bulk import senders (CSV)"
-      hint="Columns: phone, label, role, sessionPath (tdata dir/zip on server; optional sibling account.json), proxyLabel"
+      hint="Columns: phone or username (phone can be omitted if sibling JSON has it), label, role, sessionPath, proxyLabel"
       button-label="Bulk import"
       :loading="bulkImporting"
       :result-summary="bulkImportSummary"
