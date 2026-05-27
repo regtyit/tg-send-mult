@@ -129,6 +129,15 @@ describe('accountImportTdataBody', () => {
     ).toThrow();
   });
 
+  it('accepts tdata+json payload without phone when JSON will supply it', () => {
+    const out = accountImportTdataBody.parse({
+      tdataPath: '/tmp/tdata',
+      jsonPath: '/tmp/info.json',
+    });
+    expect(out.phone).toBeUndefined();
+    expect(out.jsonPath).toBe('/tmp/info.json');
+  });
+
   it('accepts full tdata+json payload', () => {
     const out = accountImportTdataBody.parse({
       phone: '+14155552671',

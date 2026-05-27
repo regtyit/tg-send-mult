@@ -16,4 +16,4 @@ export {
   prepareTdataRoot,
 } from './tdataImport';
 export { importAccountFromJsonFile, type ImportJsonAccountOptions } from './jsonImport';
-export { readJsonAccountMetadata, type JsonAccountMetadata } from './jsonImport';
+export { readJsonAccountMetadata, unwrapJsonAccountRoot, type JsonAccountMetadata } from './jsonImport';

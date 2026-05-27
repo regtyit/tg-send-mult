@@ -150,7 +150,8 @@ export const proxyPatchBody = z
 
 export const accountImportTdataBody = z
   .object({
-    phone: phoneE164,
+    /** Optional when JSON metadata includes `phone`. */
+    phone: phoneE164.optional(),
     tdataPath: z.string().trim().min(1).max(4000),
     jsonPath: z.string().trim().min(1).max(4000),
     proxyId: objectIdString.optional(),

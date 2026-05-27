@@ -502,13 +502,20 @@ async function main() {
       r.post('/accounts/import-tdata', async (req, reply) => {
         const body = validate(reply, accountImportTdataBody, req.body);
         if (!body) return;
-        const jsonMeta = body.jsonPath ? readJsonAccountMetadata(body.jsonPath) : null;
-        const imported = await importAccountWithRollback(body.phone, () =>
-          importSessionFromTdata(body.phone, body.tdataPath, {
+        const jsonMeta = readJsonAccountMetadata(body.jsonPath, body.phone);
+        const phone = (body.phone?.trim() || jsonMeta.phone || '').trim();
+        if (!phone) {
+          return reply.code(400).send({
+            error: 'phone_required',
+            message: 'Phone is required (form field or in JSON metadata).',
+          });
+        }
+        const imported = await importAccountWithRollback(phone, () =>
+          importSessionFromTdata(phone, body.tdataPath, {
             proxyId: body.proxyId,
-            label: body.label || jsonMeta?.label,
-            deviceProfile: jsonMeta?.deviceProfile,
-            ...(jsonMeta?.telegramApiId && jsonMeta.telegramApiHash
+            label: body.label || jsonMeta.label,
+            deviceProfile: jsonMeta.deviceProfile,
+            ...(jsonMeta.telegramApiId && jsonMeta.telegramApiHash
               ? { telegramApiId: jsonMeta.telegramApiId, telegramApiHash: jsonMeta.telegramApiHash }
               : {}),
           }),

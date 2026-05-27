@@ -1,7 +1,8 @@
 import fs from 'fs';
 import path from 'path';
 import { AccountModel, ProxyModel } from '../../db/models';
-import { importAccountFromJsonFile } from './jsonImport';
+import { resolveImportPath } from '../../util/resolveImportPath';
+import { importAccountFromJsonFile, readJsonAccountMetadata } from './jsonImport';
 import { importSessionFromTdata } from './tdataImport';
 
 export interface AccountBulkRow {
@@ -34,6 +35,33 @@ function pick(row: AccountBulkRow, ...keys: string[]): string {
   return '';
 }
 
+function findSiblingJsonMetadata(sessionPath: string): string | null {
+  const resolved = resolveImportPath(sessionPath);
+  const dirs = [path.dirname(resolved)];
+  if (path.basename(resolved).toLowerCase() === 'tdata') {
+    dirs.push(path.dirname(resolved));
+  }
+  const names = ['account.json', 'metadata.json', 'info.json'];
+  for (const dir of dirs) {
+    for (const name of names) {
+      const candidate = path.join(dir, name);
+      if (fs.existsSync(candidate)) return candidate;
+    }
+    try {
+      const jsonFiles = fs
+        .readdirSync(dir)
+        .filter((f) => f.toLowerCase().endsWith('.json'))
+        .sort();
+      if (jsonFiles.length === 1) {
+        return path.join(dir, jsonFiles[0]!);
+      }
+    } catch {
+      // ignore unreadable dirs
+    }
+  }
+  return null;
+}
+
 export async function bulkImportAccountsFromCsv(
   csv: string,
   opts: { defaultCountry?: string } = {},
@@ -54,13 +82,14 @@ export async function bulkImportAccountsFromCsv(
     const role = roleRaw === 'test_recipient' ? 'test_recipient' : 'sender';
     const proxyLabel = pick(row, 'proxyLabel', 'proxy_label');
 
-    if (!phone || !sessionPath) {
+    if (!sessionPath) {
       failed++;
-      results.push({ line, ok: false, phone, error: 'phone and sessionPath required' });
+      results.push({ line, ok: false, phone, error: 'sessionPath required' });
       continue;
     }
 
-    if (!fs.existsSync(sessionPath)) {
+    const resolvedSessionPath = resolveImportPath(sessionPath);
+    if (!fs.existsSync(resolvedSessionPath)) {
       failed++;
       results.push({ line, ok: false, phone, error: `path not found: ${sessionPath}` });
       continue;
@@ -78,22 +107,40 @@ export async function bulkImportAccountsFromCsv(
         proxyId = String(proxy._id);
       }
 
-      const ext = path.extname(sessionPath).toLowerCase();
-      const stat = fs.statSync(sessionPath);
+      const ext = path.extname(resolvedSessionPath).toLowerCase();
+      const stat = fs.statSync(resolvedSessionPath);
       let accountId: string;
+      let effectivePhone = phone;
 
-      if (stat.isDirectory() || sessionPath.toLowerCase().endsWith('.zip')) {
-        const acc = await importSessionFromTdata(phone, sessionPath, {
-          label,
+      if (stat.isDirectory() || resolvedSessionPath.toLowerCase().endsWith('.zip')) {
+        const jsonPath = findSiblingJsonMetadata(resolvedSessionPath);
+        const jsonMeta = jsonPath ? readJsonAccountMetadata(jsonPath, phone || undefined) : null;
+        effectivePhone = (phone || jsonMeta?.phone || '').trim();
+        if (!effectivePhone) {
+          failed++;
+          results.push({
+            line,
+            ok: false,
+            error: 'phone required in CSV or JSON metadata for tdata import',
+          });
+          continue;
+        }
+        const acc = await importSessionFromTdata(effectivePhone, resolvedSessionPath, {
+          label: label || jsonMeta?.label,
           proxyId,
+          deviceProfile: jsonMeta?.deviceProfile,
+          ...(jsonMeta?.telegramApiId && jsonMeta.telegramApiHash
+            ? { telegramApiId: jsonMeta.telegramApiId, telegramApiHash: jsonMeta.telegramApiHash }
+            : {}),
         });
         accountId = String(acc._id);
       } else if (ext === '.json') {
-        const acc = await importAccountFromJsonFile(sessionPath, {
-          phone,
+        const acc = await importAccountFromJsonFile(resolvedSessionPath, {
+          phone: phone || undefined,
           label,
           proxyId,
         });
+        effectivePhone = acc.phone;
         accountId = String(acc._id);
       } else {
         failed++;
@@ -114,7 +161,7 @@ export async function bulkImportAccountsFromCsv(
       }
 
       imported++;
-      results.push({ line, ok: true, phone, accountId });
+      results.push({ line, ok: true, phone: effectivePhone, accountId });
     } catch (err) {
       failed++;
       results.push({

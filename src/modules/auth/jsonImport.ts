@@ -5,11 +5,12 @@ import { config } from '../../config';
 import { AccountModel, ProxyModel } from '../../db/models';
 import type { AccountDoc } from '../../db/models/Account';
 import { defaultDeviceProfile, type DeviceProfile } from '../../telegram/client';
+import { resolveImportPath } from '../../util/resolveImportPath';
 import { importSessionString, type ImportSessionOptions } from './sessionImport';
 import { resolveSendingWindowForNewAccount } from '../accounts/regionalSendingWindow';
 
 interface JsonAccountLike {
-  phone?: string | null;
+  phone?: string | number | null;
   username?: string | null;
   device?: string | null;
   sdk?: string | null;
@@ -33,19 +34,50 @@ export interface JsonAccountMetadata {
   telegramApiHash?: string;
 }
 
+function stripJsonBom(raw: string): string {
+  return raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw;
+}
+
+function normalizePhoneFromJson(value: unknown): string | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    const digits = String(Math.trunc(Math.abs(value)));
+    return digits || undefined;
+  }
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    return trimmed || undefined;
+  }
+  return undefined;
+}
+
+function normalizeLabelFromJson(obj: JsonAccountLike): string | undefined {
+  const r = obj as Record<string, unknown>;
+  for (const key of ['username', 'user_name', 'userName', 'login', 'name', 'first_name', 'firstName']) {
+    const v = r[key];
+    if (typeof v === 'string' && v.trim()) return v.trim();
+  }
+  return undefined;
+}
+
 function normalizeDeviceProfileFromJson(obj: JsonAccountLike): DeviceProfile {
   const d = defaultDeviceProfile();
-  const pick = (value: unknown, fallback: string) => {
-    if (typeof value !== 'string') return fallback;
-    const trimmed = value.trim();
-    return trimmed || fallback;
+  const r = obj as Record<string, unknown>;
+  const pick = (keys: string[], fallback: string) => {
+    for (const key of keys) {
+      const value = r[key];
+      if (typeof value === 'string') {
+        const trimmed = value.trim();
+        if (trimmed) return trimmed;
+      }
+    }
+    return fallback;
   };
   return {
-    deviceModel: pick(obj.device, d.deviceModel),
-    systemVersion: pick(obj.sdk, d.systemVersion),
-    appVersion: pick(obj.app_version, d.appVersion),
-    langCode: pick(obj.lang_code, d.langCode),
-    systemLangCode: pick(obj.system_lang_code, d.systemLangCode),
+    deviceModel: pick(['device', 'device_model', 'deviceModel'], d.deviceModel),
+    systemVersion: pick(['sdk', 'system_version', 'systemVersion'], d.systemVersion),
+    appVersion: pick(['app_version', 'appVersion'], d.appVersion),
+    langCode: pick(['lang_code', 'langCode'], d.langCode),
+    systemLangCode: pick(['system_lang_code', 'systemLangCode'], d.systemLangCode),
   };
 }
 
@@ -92,25 +124,62 @@ function telegramApiFromJson(obj: JsonAccountLike): {
   return {};
 }
 
-/**
- * Some exports wrap the account in a single-key object, e.g. `{ "227636356": { "app_id": ... } }`.
- */
-function unwrapJsonAccountRoot(parsed: unknown): JsonAccountLike {
-  if (parsed == null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    return {};
-  }
-  const o = parsed as Record<string, unknown>;
-  const hasFlatAccountField =
+function hasFlatAccountFields(o: Record<string, unknown>): boolean {
+  return (
     'phone' in o ||
     'app_id' in o ||
     'app_hash' in o ||
     'appId' in o ||
     'appHash' in o ||
+    'api_id' in o ||
+    'api_hash' in o ||
     'session_file' in o ||
-    'sessionFile' in o;
-  if (hasFlatAccountField) {
+    'sessionFile' in o ||
+    'session' in o ||
+    'device' in o
+  );
+}
+
+/**
+ * Normalize common account-export JSON shapes:
+ * - flat object
+ * - `{ "227636356": { ... } }` (phone/user id wrapper)
+ * - `{ account: {...} }` / `{ data: {...} }`
+ * - `[{ ... }]` array (optional phone hint to pick the right row)
+ */
+export function unwrapJsonAccountRoot(parsed: unknown, phoneHint?: string): JsonAccountLike {
+  if (parsed == null) return {};
+
+  if (Array.isArray(parsed)) {
+    if (parsed.length === 0) return {};
+    const hint = phoneHint?.trim();
+    if (hint) {
+      for (const item of parsed) {
+        const row = unwrapJsonAccountRoot(item);
+        const phone = normalizePhoneFromJson(row.phone);
+        if (phone && (phone === hint || phone.endsWith(hint.replace(/^\+/, '')))) {
+          return row;
+        }
+      }
+    }
+    return unwrapJsonAccountRoot(parsed[0]);
+  }
+
+  if (typeof parsed !== 'object') return {};
+
+  const o = parsed as Record<string, unknown>;
+  if (hasFlatAccountFields(o)) {
     return o as JsonAccountLike;
   }
+
+  for (const key of ['account', 'data', 'session', 'user']) {
+    const inner = o[key];
+    if (inner != null && typeof inner === 'object' && !Array.isArray(inner)) {
+      const unwrapped = unwrapJsonAccountRoot(inner, phoneHint);
+      if (Object.keys(unwrapped).length) return unwrapped;
+    }
+  }
+
   const keys = Object.keys(o);
   if (keys.length === 1) {
     const inner = o[keys[0]];
@@ -118,16 +187,45 @@ function unwrapJsonAccountRoot(parsed: unknown): JsonAccountLike {
       return inner as JsonAccountLike;
     }
   }
+
   return o as JsonAccountLike;
+}
+
+function parseJsonAccountFile(jsonPath: string, phoneHint?: string): JsonAccountLike {
+  const resolved = resolveImportPath(jsonPath);
+  let raw: string;
+  try {
+    raw = fs.readFileSync(resolved, 'utf8');
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(`Cannot read JSON metadata at ${jsonPath} (resolved: ${resolved}): ${msg}`);
+  }
+  try {
+    return unwrapJsonAccountRoot(JSON.parse(stripJsonBom(raw)), phoneHint);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(`Invalid JSON in ${jsonPath}: ${msg}`);
+  }
 }
 
 function resolveSessionString(raw: unknown, baseDir: string): string {
   if (typeof raw !== 'string') return '';
   const value = raw.trim();
   if (!value) return '';
-  const absolute = path.isAbsolute(value) ? value : path.resolve(baseDir, value);
+  const absolute = resolveImportPath(path.isAbsolute(value) ? value : path.resolve(baseDir, value));
   if (fs.existsSync(absolute)) return fs.readFileSync(absolute, 'utf8').trim();
   return value;
+}
+
+function metadataFromAccountJson(data: JsonAccountLike): JsonAccountMetadata {
+  const api = telegramApiFromJson(data);
+  return {
+    phone: normalizePhoneFromJson(data.phone),
+    label: normalizeLabelFromJson(data),
+    deviceProfile: normalizeDeviceProfileFromJson(data),
+    telegramApiId: api.telegramApiId,
+    telegramApiHash: api.telegramApiHash,
+  };
 }
 
 /**
@@ -135,28 +233,20 @@ function resolveSessionString(raw: unknown, baseDir: string): string {
  * session data. Useful when combining `tdata` session import with metadata
  * fields (`app_id`, `app_hash`, device/lang) from a separate JSON dump.
  */
-export function readJsonAccountMetadata(jsonPath: string): JsonAccountMetadata {
-  const raw = fs.readFileSync(jsonPath, 'utf8');
-  const data = unwrapJsonAccountRoot(JSON.parse(raw));
-  const api = telegramApiFromJson(data);
-  return {
-    phone: typeof data.phone === 'string' ? data.phone.trim() || undefined : undefined,
-    label: typeof data.username === 'string' ? data.username.trim() || undefined : undefined,
-    deviceProfile: normalizeDeviceProfileFromJson(data),
-    telegramApiId: api.telegramApiId,
-    telegramApiHash: api.telegramApiHash,
-  };
+export function readJsonAccountMetadata(jsonPath: string, phoneHint?: string): JsonAccountMetadata {
+  const data = parseJsonAccountFile(jsonPath, phoneHint);
+  return metadataFromAccountJson(data);
 }
 
 export async function importAccountFromJsonFile(
   jsonPath: string,
   opts: ImportJsonAccountOptions = {},
 ): Promise<AccountDoc> {
-  const raw = fs.readFileSync(jsonPath, 'utf8');
-  const data = unwrapJsonAccountRoot(JSON.parse(raw));
-  const jsonDir = path.dirname(path.resolve(jsonPath));
+  const phoneHint = opts.phone?.trim();
+  const data = parseJsonAccountFile(jsonPath, phoneHint);
+  const jsonDir = path.dirname(resolveImportPath(jsonPath));
 
-  const phone = String(opts.phone ?? data.phone ?? '').trim();
+  const phone = String(phoneHint ?? normalizePhoneFromJson(data.phone) ?? '').trim();
   if (!phone) {
     throw new Error(
       'Phone is required. Provide it via --phone or include non-empty "phone" in JSON.',
@@ -168,7 +258,7 @@ export async function importAccountFromJsonFile(
     : null;
 
   const deviceProfile = opts.deviceProfile ?? normalizeDeviceProfileFromJson(data);
-  const label = opts.label ?? String(data.username ?? '').trim();
+  const label = opts.label ?? normalizeLabelFromJson(data) ?? '';
   const rdata = readRecord(data);
   const sessionString = resolveSessionString(
     rdata.session_file ?? rdata.sessionFile ?? rdata.session,

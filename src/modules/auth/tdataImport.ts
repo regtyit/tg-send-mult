@@ -6,6 +6,7 @@ import path from 'path';
 import { Types } from 'mongoose';
 import type { AccountDoc } from '../../db/models/Account';
 import { ProxyModel } from '../../db/models';
+import { resolveImportPath } from '../../util/resolveImportPath';
 import { buildGramJsStringSessionV1 } from './gramJsStringSession';
 import { importSessionString, type ImportSessionOptions } from './sessionImport';
 import { connectWithSavedSession } from './connect';
@@ -93,9 +94,9 @@ export interface PreparedTdataRoot {
  * Zips are extracted to a temporary directory; call `cleanup()` when done.
  */
 export function prepareTdataRoot(inputPath: string): PreparedTdataRoot {
-  const abs = path.resolve(inputPath);
+  const abs = resolveImportPath(inputPath);
   if (!fs.existsSync(abs)) {
-    throw new Error(`Path does not exist: ${abs}`);
+    throw new Error(`Path does not exist: ${inputPath} (resolved: ${abs})`);
   }
 
   const stat = fs.statSync(abs);

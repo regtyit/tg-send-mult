@@ -131,11 +131,11 @@
     <v-card class="mb-6 pa-4" variant="outlined">
       <v-card-title class="text-subtitle-1 px-0 pt-0">Import account (tdata / JSON)</v-card-title>
       <p class="text-caption text-medium-emphasis mb-4">
-        Paste filesystem paths on the server machine. For tdata import, JSON metadata is required.
+        Paste filesystem paths on the server machine. For tdata import, JSON metadata is required (phone can come from JSON).
       </p>
       <v-row dense align="end">
         <v-col cols="12" md="3">
-          <v-text-field v-model="importPhone" label="Phone +E.164" variant="outlined" density="comfortable" />
+          <v-text-field v-model="importPhone" label="Phone +E.164 (optional if in JSON)" variant="outlined" density="comfortable" />
         </v-col>
         <v-col cols="12" md="4">
           <v-text-field v-model="importTdataPath" label="tdata path" variant="outlined" density="comfortable" />
@@ -575,8 +575,8 @@ async function registerShell(): Promise<void> {
 }
 
 async function importTdata(): Promise<void> {
-  if (!importPhone.value.trim() || !importTdataPath.value.trim() || !importJsonPath.value.trim()) {
-    toast.warning('Phone, tdata path, and JSON path are required for tdata import.');
+  if (!importTdataPath.value.trim() || !importJsonPath.value.trim()) {
+    toast.warning('tdata path and JSON path are required for tdata import.');
     return;
   }
   importingTdata.value = true;
@@ -584,7 +584,7 @@ async function importTdata(): Promise<void> {
     await apiFetch('/api/accounts/import-tdata', {
       method: 'POST',
       body: JSON.stringify({
-        phone: importPhone.value.trim(),
+        ...(importPhone.value.trim() ? { phone: importPhone.value.trim() } : {}),
         tdataPath: importTdataPath.value.trim(),
         jsonPath: importJsonPath.value.trim(),
         proxyId: importProxyId.value.trim() || undefined,

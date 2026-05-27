@@ -2,7 +2,32 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { describe, expect, it } from 'vitest';
-import { readJsonAccountMetadata } from '../../src/modules/auth/jsonImport';
+import {
+  readJsonAccountMetadata,
+  unwrapJsonAccountRoot,
+} from '../../src/modules/auth/jsonImport';
+
+describe('unwrapJsonAccountRoot', () => {
+  it('unwraps nested account/data wrappers', () => {
+    const row = unwrapJsonAccountRoot({
+      data: { phone: '+14155552671', app_id: 1, app_hash: 'abc' },
+    });
+    expect(row.phone).toBe('+14155552671');
+    expect(row.app_id).toBe(1);
+  });
+
+  it('unwraps array exports and picks row by phone hint', () => {
+    const row = unwrapJsonAccountRoot(
+      [
+        { phone: '+11111111111', app_id: 1, app_hash: 'a' },
+        { phone: '+22222222222', app_id: 2, app_hash: 'b' },
+      ],
+      '+22222222222',
+    );
+    expect(row.phone).toBe('+22222222222');
+    expect(row.app_id).toBe(2);
+  });
+});
 
 describe('readJsonAccountMetadata', () => {
   it('extracts app/device/label metadata from flat JSON', () => {
@@ -59,5 +84,42 @@ describe('readJsonAccountMetadata', () => {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
-});
 
+  it('reads numeric phone and api_id from seller-style JSON', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tg-json-num-'));
+    const file = path.join(dir, 'acc.json');
+    try {
+      fs.writeFileSync(
+        file,
+        JSON.stringify({
+          phone: 79001234567,
+          app_id: '2040',
+          app_hash: 'b18441a1ff607e10a989891a5462e627',
+          device: 'Samsung SM-G973F',
+        }),
+      );
+      const m = readJsonAccountMetadata(file);
+      expect(m.phone).toBe('79001234567');
+      expect(m.telegramApiId).toBe(2040);
+      expect(m.telegramApiHash).toBe('b18441a1ff607e10a989891a5462e627');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('strips UTF-8 BOM from JSON files', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tg-json-bom-'));
+    const file = path.join(dir, 'acc.json');
+    try {
+      fs.writeFileSync(
+        file,
+        `\uFEFF${JSON.stringify({ phone: '+14155552671', app_id: 1, app_hash: 'x' })}`,
+        'utf8',
+      );
+      const m = readJsonAccountMetadata(file);
+      expect(m.phone).toBe('+14155552671');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
