@@ -13,11 +13,13 @@ COPY src ./src
 RUN npm run build
 
 FROM node:20-bookworm-slim AS web-build
-WORKDIR /app/web
-COPY web/package.json web/package-lock.json ./
-RUN npm ci
-COPY web ./
-RUN npm run build
+WORKDIR /app
+COPY web/package.json web/package-lock.json ./web/
+RUN cd web && npm ci
+COPY web ./web/
+# Nuxt @repo alias → /app/src; dashboard only needs proxy link parsing (no mongoose).
+COPY src/telegram/proxyParse.ts ./src/telegram/proxyParse.ts
+RUN cd web && npm run build
 
 FROM node:20-bookworm-slim AS runtime
 WORKDIR /app

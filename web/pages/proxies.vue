@@ -255,7 +255,7 @@
 </template>
 
 <script setup lang="ts">
-import { coerceMtProxyImportFields, tryParseTelegramProxyLink } from '@repo/telegram/proxyPayload';
+import { coerceMtProxyImportFields, tryParseTelegramProxyLink } from '@repo/telegram/proxyParse';
 import { errorText } from '~/composables/useToast';
 import { DATA_TABLE_CLASS, fixedCol } from '~/utils/tableColumns';
 
