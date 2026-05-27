@@ -111,5 +111,72 @@ function inWindow(
   return cur >= a || cur <= b;
 }
 
+function minutesUntilWindowOpens(
+  now: Date,
+  tz: string,
+  start: { h: number; m: number },
+  end: { h: number; m: number },
+): number {
+  const cur = minutesInTz(now, tz);
+  const a = start.h * 60 + start.m;
+  const b = end.h * 60 + end.m;
+  if (inWindow(now, tz, start, end)) return 0;
+  if (a <= b) {
+    if (cur < a) return a - cur;
+    return 24 * 60 - cur + a;
+  }
+  if (cur > b && cur < a) return a - cur;
+  return 0;
+}
+
+function formatLocalTimeInTz(when: Date, timeZone: string): string {
+  try {
+    return new Intl.DateTimeFormat('en-GB', {
+      timeZone,
+      weekday: 'short',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    }).format(when);
+  } catch {
+    return when.toISOString();
+  }
+}
+
+export interface SendingWindowStatus {
+  inWindow: boolean;
+  quietUntil?: string;
+  resumesAtLocal?: string;
+}
+
+export function describeSendingWindowAccount(
+  account: Pick<AccountDoc, 'sendingWindow'>,
+  now = new Date(),
+): SendingWindowStatus {
+  const tz = account.sendingWindow?.timezone?.trim() || 'UTC';
+  const start = safeParseWithFallback(
+    account.sendingWindow?.start,
+    { h: 0, m: 0 },
+    'account.sendingWindow.start',
+  );
+  const end = safeParseWithFallback(
+    account.sendingWindow?.end,
+    { h: 23, m: 59 },
+    'account.sendingWindow.end',
+  );
+  if (inWindow(now, tz, start, end)) {
+    return { inWindow: true };
+  }
+  const waitMin = minutesUntilWindowOpens(now, tz, start, end);
+  const resume = new Date(now.getTime() + waitMin * 60_000);
+  const resumesAtLocal = formatLocalTimeInTz(resume, tz);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return {
+    inWindow: false,
+    quietUntil: `Quiet until ${pad(start.h)}:${pad(start.m)} (${tz}) · ~${resumesAtLocal}`,
+    resumesAtLocal,
+  };
+}
+
 /** Strict variant for config-time validation; throws on invalid input. */
 export { parseHHMMOrThrow };

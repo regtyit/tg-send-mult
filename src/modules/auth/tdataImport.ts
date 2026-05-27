@@ -4,8 +4,10 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import type { AccountDoc } from '../../db/models/Account';
+import { AccountModel } from '../../db/models';
+import { phoneCountryIso2 } from '../accounts/phoneCountry';
 import { resolveImportPath } from '../../util/resolveImportPath';
-import { connectAccountViaMtProxies } from '../proxy/assign';
+import { claimMtProxyForAccount, connectAccountViaMtProxies } from '../proxy/assign';
 import { buildGramJsStringSessionV1 } from './gramJsStringSession';
 import { importSessionString, type ImportSessionOptions } from './sessionImport';
 import { connectWithSavedSession } from './connect';
@@ -310,16 +312,22 @@ export async function importSessionFromTdata(
   opts: ImportSessionOptions = {},
 ): Promise<AccountDoc> {
   const sessionString = await tdataToStringSession(tdataPath);
-  const { proxyId: preferProxyId, ...importOpts } = opts;
+  const { proxyId: preferProxyId, verifySession = true, ...importOpts } = opts;
   const account = await importSessionString(phone, sessionString, importOpts);
-  /**
-   * Verify imported session immediately (`get_me`) so operator gets a hard
-   * pass/fail signal at import time. Auto-picks an in-country MTProxy and
-   * retries on transport failures instead of failing on the first dead proxy.
-   */
+
+  if (verifySession === false) {
+    const country = phoneCountryIso2(account.phone);
+    if (country) {
+      await claimMtProxyForAccount(account._id, country);
+    }
+    const refreshed = await AccountModel.findById(account._id);
+    return refreshed ?? account;
+  }
+
   return connectAccountViaMtProxies(
     account,
     (acc, proxy) => connectWithSavedSession(acc, proxy),
     preferProxyId,
+    { maxAttempts: 3 },
   );
 }

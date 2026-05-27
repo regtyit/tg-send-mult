@@ -1,5 +1,5 @@
 import { logger } from '../../logger';
-import { isWithinSendingWindowAccount } from '../../modules/antilimit/window';
+import { describeSendingWindowAccount } from '../../modules/antilimit/window';
 import { describeSenderEligibility, formatEligibilityReasons } from '../../modules/multi/senderEligibility';
 import type { AccountDoc } from '../../db/models/Account';
 
@@ -42,10 +42,13 @@ export function sanitizeAccount(doc: unknown): Record<string, unknown> | null {
   if (sw && typeof sw === 'object') {
     out.sendingWindow = sw;
     try {
-      const inWindow = isWithinSendingWindowAccount({ sendingWindow: sw } as AccountDoc);
-      out.sendingActiveNow = inWindow;
-      if (!inWindow) {
-        out.sendingQuietUntil = `Outside local window ${sw.start}–${sw.end} (${sw.timezone})`;
+      const status = describeSendingWindowAccount({ sendingWindow: sw } as AccountDoc);
+      out.sendingActiveNow = status.inWindow;
+      if (!status.inWindow && status.quietUntil) {
+        out.sendingQuietUntil = status.quietUntil;
+      }
+      if (status.resumesAtLocal) {
+        out.sendingResumesAtLocal = status.resumesAtLocal;
       }
     } catch (err) {
       logger.warn({ err, accountId: obj._id }, 'api: sending window check failed; defaulting to unknown');

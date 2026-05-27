@@ -446,6 +446,7 @@ async function main() {
             importSessionFromTdata(phone, body.tdataPath, {
               label: body.label || jsonMeta.label,
               deviceProfile: jsonMeta.deviceProfile,
+              verifySession: false,
               ...(jsonMeta.telegramApiId && jsonMeta.telegramApiHash
                 ? { telegramApiId: jsonMeta.telegramApiId, telegramApiHash: jsonMeta.telegramApiHash }
                 : {}),

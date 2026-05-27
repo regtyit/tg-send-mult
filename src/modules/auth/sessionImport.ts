@@ -20,6 +20,11 @@ export interface ImportSessionOptions {
   telegramApiHash?: string;
   /** ISO2 region for default sending window (else derived from phone). */
   sendingWindowRegion?: string;
+  /**
+   * When false, skip Telegram `get_me` at import (API/dashboard). Session is saved and
+   * MTProxy is auto-assigned by country; verify later via test send or sync.
+   */
+  verifySession?: boolean;
 }
 
 /**

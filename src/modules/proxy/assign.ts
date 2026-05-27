@@ -132,6 +132,7 @@ export async function connectAccountViaMtProxies(
   account: AccountDoc,
   connect: (acc: AccountDoc, proxy: ProxyDoc) => Promise<{ userId: string; telegramUsername: string }>,
   preferProxyId?: string,
+  options: { maxAttempts?: number } = {},
 ): Promise<AccountDoc> {
   const country = phoneCountryIso2(account.phone);
   if (!country) {
@@ -144,7 +145,11 @@ export async function connectAccountViaMtProxies(
   }
 
   const candidates = await listMtProxiesForPhoneCountry(account.phone, account._id, preferProxyId);
-  if (!candidates.length) {
+  const toTry =
+    typeof options.maxAttempts === 'number' && options.maxAttempts > 0
+      ? candidates.slice(0, options.maxAttempts)
+      : candidates;
+  if (!toTry.length) {
     throw new TgDomainError({
       kind: 'proxy_invalid',
       code: 'NO_MTPROXY',
@@ -156,7 +161,7 @@ export async function connectAccountViaMtProxies(
   let lastErr: unknown;
   const tried: string[] = [];
 
-  for (const proxy of candidates) {
+  for (const proxy of toTry) {
     try {
       try {
         await ensureProxyNotUsedByAnotherAccount(String(proxy._id), String(account._id));
