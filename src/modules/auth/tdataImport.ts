@@ -3,10 +3,9 @@ import { unzipSync } from 'fflate';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { Types } from 'mongoose';
 import type { AccountDoc } from '../../db/models/Account';
-import { ProxyModel } from '../../db/models';
 import { resolveImportPath } from '../../util/resolveImportPath';
+import { connectAccountViaMtProxies } from '../proxy/assign';
 import { buildGramJsStringSessionV1 } from './gramJsStringSession';
 import { importSessionString, type ImportSessionOptions } from './sessionImport';
 import { connectWithSavedSession } from './connect';
@@ -311,12 +310,16 @@ export async function importSessionFromTdata(
   opts: ImportSessionOptions = {},
 ): Promise<AccountDoc> {
   const sessionString = await tdataToStringSession(tdataPath);
-  const account = await importSessionString(phone, sessionString, opts);
+  const { proxyId: preferProxyId, ...importOpts } = opts;
+  const account = await importSessionString(phone, sessionString, importOpts);
   /**
    * Verify imported session immediately (`get_me`) so operator gets a hard
-   * pass/fail signal at import time, not later during campaign processing.
+   * pass/fail signal at import time. Auto-picks an in-country MTProxy and
+   * retries on transport failures instead of failing on the first dead proxy.
    */
-  const proxyDoc = opts.proxyId ? await ProxyModel.findById(new Types.ObjectId(opts.proxyId)) : null;
-  await connectWithSavedSession(account, proxyDoc);
-  return account;
+  return connectAccountViaMtProxies(
+    account,
+    (acc, proxy) => connectWithSavedSession(acc, proxy),
+    preferProxyId,
+  );
 }

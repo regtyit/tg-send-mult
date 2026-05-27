@@ -11,6 +11,10 @@ import { Types } from 'mongoose';
 import { config } from '../../config';
 import { phoneCountryIso2 } from '../../modules/accounts/phoneCountry';
 import {
+  claimMtProxyForAccount,
+  ensureProxyNotUsedByAnotherAccount,
+} from '../../modules/proxy/assign';
+import {
   getRegionalSendingWindow,
   listRegionalSendingWindows,
   resolveSendingWindowForNewAccount,
@@ -104,84 +108,6 @@ function requiresHttpBasicAuth(pathname: string): boolean {
   if (pathname === '/api' || pathname.startsWith('/api/')) return true;
   if (pathname === '/admin' || pathname.startsWith('/admin/')) return true;
   return false;
-}
-
-async function ensureProxyNotUsedByAnotherAccount(
-  proxyId: string,
-  accountId: string,
-): Promise<void> {
-  const conflict = await AccountModel.findOne({
-    _id: { $ne: new Types.ObjectId(accountId) },
-    proxyId: new Types.ObjectId(proxyId),
-  })
-    .select('_id phone')
-    .lean();
-  if (conflict) {
-    throw new Error(`MTProxy already assigned to another account: ${conflict.phone}`);
-  }
-}
-
-/**
- * Atomically claim an unused MTProxy for the given account/country and write
- * the assignment back to the account document. Two concurrent auto-assign
- * requests will pick distinct proxies (or the second returns null if there
- * are no more free proxies in that country) instead of both racing on the
- * same one.
- *
- * Implementation: `findOneAndUpdate` on Account with a guard that the proxy
- * we picked isn't already used by any other account.
- */
-async function claimProxyForAccount(
-  accountId: Types.ObjectId,
-  country: string,
-): Promise<string | null> {
-  const upper = country.toUpperCase();
-  const MAX_ATTEMPTS = 8;
-
-  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
-    const used = await AccountModel.find({
-      _id: { $ne: accountId },
-      proxyId: { $ne: null },
-    })
-      .select('proxyId')
-      .lean();
-    const usedIds = used
-      .map((x) => (x.proxyId ? new Types.ObjectId(String(x.proxyId)) : null))
-      .filter((x): x is Types.ObjectId => x !== null);
-
-    const candidate = await ProxyModel.findOne({
-      country: upper,
-      ...(usedIds.length ? { _id: { $nin: usedIds } } : {}),
-    })
-      .sort({ healthScore: -1, createdAt: 1 })
-      .select('_id')
-      .lean();
-    if (!candidate?._id) return null;
-
-    /**
-     * Conditional claim: only set proxyId if no *other* account has it. The
-     * `$elemMatch` style filter on the Account collection wouldn't help here,
-     * so we double-check the proxy is still free at write time. If a race
-     * stole it from us we just pick the next candidate.
-     */
-    const stillFree = await AccountModel.exists({
-      _id: { $ne: accountId },
-      proxyId: candidate._id,
-    });
-    if (stillFree) {
-      continue;
-    }
-    const updated = await AccountModel.findOneAndUpdate(
-      { _id: accountId },
-      { $set: { proxyId: candidate._id } },
-      { new: true },
-    );
-    if (updated) {
-      return String(candidate._id);
-    }
-    return null;
-  }
-  return null;
 }
 
 async function buildBoard(): Promise<FastifyAdapter> {
@@ -389,7 +315,7 @@ async function main() {
           if (!country) {
             return reply.code(400).send({ error: `Cannot derive country from phone ${account.phone}` });
           }
-          const picked = await claimProxyForAccount(account._id, country);
+          const picked = await claimMtProxyForAccount(account._id, country);
           if (!picked) {
             return reply.code(400).send({ error: `No free proxy for country ${country}` });
           }
@@ -400,6 +326,9 @@ async function main() {
         const proxyId = new Types.ObjectId(body.proxyId);
         const proxy = await ProxyModel.findById(proxyId);
         if (!proxy) return reply.code(404).send({ error: 'proxy not found' });
+        if (proxy.type !== 'mtproto') {
+          return reply.code(400).send({ error: 'Only MTProto proxies can be assigned to senders' });
+        }
         const phoneCountry = phoneCountryIso2(account.phone);
         if (!phoneCountry) {
           return reply.code(400).send({ error: `Cannot derive country from phone ${account.phone}` });
@@ -430,7 +359,7 @@ async function main() {
             errors.push(`${acc.phone}: country unknown`);
             continue;
           }
-          const picked = await claimProxyForAccount(acc._id, country);
+          const picked = await claimMtProxyForAccount(acc._id, country);
           if (!picked) {
             skipped++;
             errors.push(`${acc.phone}: no free proxy for ${country}`);
@@ -512,7 +441,6 @@ async function main() {
         }
         const imported = await importAccountWithRollback(phone, () =>
           importSessionFromTdata(phone, body.tdataPath, {
-            proxyId: body.proxyId,
             label: body.label || jsonMeta.label,
             deviceProfile: jsonMeta.deviceProfile,
             ...(jsonMeta.telegramApiId && jsonMeta.telegramApiHash

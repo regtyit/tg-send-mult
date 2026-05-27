@@ -15,9 +15,8 @@
       <div class="font-weight-medium mb-2">How this app is structured</div>
       <ul class="text-body-2 pl-4 mb-0">
         <li>
-          <strong>Sending accounts</strong> (this page): Telegram identities that deliver messages. Log in via CLI:
-          <code class="text-caption">npm run cli -- auth login</code>
-          or attach a session string to the row below.
+          <strong>Sending accounts</strong> (this page): import <strong>tdata + JSON</strong> below. MTProxy is
+          auto-assigned by phone country (highest health, not already used by another sender).
         </li>
         <li>
           <strong>Recipients</strong> live under
@@ -43,95 +42,10 @@
     </v-btn>
 
     <v-card class="mb-6 pa-4" variant="outlined">
-      <v-card-title class="text-subtitle-1 px-0 pt-0"> Register phone (session separately)</v-card-title>
+      <v-card-title class="text-subtitle-1 px-0 pt-0">Import sender (tdata + JSON)</v-card-title>
       <p class="text-caption text-medium-emphasis mb-4">
-        Creates a row so you can paste an encrypted session via API or CLI. It does not log into Telegram by itself.
-      </p>
-      <v-row dense align="end">
-        <v-col cols="12" md="4">
-          <v-text-field v-model="newPhone" label="Phone +E.164" variant="outlined" density="comfortable" />
-        </v-col>
-        <v-col cols="12" md="4">
-          <v-text-field v-model="newLabel" label="Label (optional)" variant="outlined" density="comfortable" />
-        </v-col>
-        <v-col cols="12" md="4">
-          <v-text-field
-            v-model="newDeviceModel"
-            label="Device model (optional)"
-            variant="outlined"
-            density="comfortable"
-          />
-        </v-col>
-        <v-col cols="12" md="4">
-          <v-text-field
-            v-model="newSystemVersion"
-            label="System version (optional)"
-            variant="outlined"
-            density="comfortable"
-          />
-        </v-col>
-        <v-col cols="12" md="4">
-          <v-text-field
-            v-model="newAppVersion"
-            label="App version (optional)"
-            variant="outlined"
-            density="comfortable"
-          />
-        </v-col>
-        <v-col cols="12" md="2">
-          <v-text-field v-model="newLangCode" label="Lang (e.g. en)" variant="outlined" density="comfortable" />
-        </v-col>
-        <v-col cols="12" md="2">
-          <v-text-field
-            v-model="newSystemLangCode"
-            label="System lang"
-            variant="outlined"
-            density="comfortable"
-          />
-        </v-col>
-        <v-col cols="12" md="2">
-          <v-text-field
-            v-model="newTelegramApiId"
-            label="Telegram api_id (optional)"
-            variant="outlined"
-            density="comfortable"
-            type="number"
-            hide-spin-buttons
-          />
-        </v-col>
-        <v-col cols="12" md="3">
-          <v-text-field
-            v-model="newTelegramApiHash"
-            label="Telegram api_hash (optional)"
-            variant="outlined"
-            density="comfortable"
-          />
-        </v-col>
-        <v-col cols="12" md="4">
-          <v-select
-            v-model="newSendingWindowRegion"
-            :items="regionItems"
-            item-title="title"
-            item-value="value"
-            label="Sending region (quiet hours)"
-            variant="outlined"
-            density="comfortable"
-            hint="Auto picks hours from phone country; bot does not send outside this window"
-            persistent-hint
-          />
-        </v-col>
-        <v-col cols="12" md="2">
-          <v-btn color="primary" block :loading="registering" :disabled="registering" @click="registerShell">
-            Add row
-          </v-btn>
-        </v-col>
-      </v-row>
-    </v-card>
-
-    <v-card class="mb-6 pa-4" variant="outlined">
-      <v-card-title class="text-subtitle-1 px-0 pt-0">Import account (tdata / JSON)</v-card-title>
-      <p class="text-caption text-medium-emphasis mb-4">
-        Paste filesystem paths on the server machine. For tdata import, JSON metadata is required (phone can come from JSON).
+        Paste server paths to Telegram Desktop <code>tdata</code> and the matching JSON export (phone, app_id, device).
+        MTProxy is chosen automatically by phone country — do not pick a proxy here.
       </p>
       <v-row dense align="end">
         <v-col cols="12" md="3">
@@ -140,20 +54,8 @@
         <v-col cols="12" md="4">
           <v-text-field v-model="importTdataPath" label="tdata path" variant="outlined" density="comfortable" />
         </v-col>
-        <v-col cols="12" md="3">
-          <v-text-field v-model="importJsonPath" label="JSON path (required for tdata)" variant="outlined" density="comfortable" />
-        </v-col>
-        <v-col cols="12" md="2">
-          <v-select
-            v-model="importProxyId"
-            :items="proxies"
-            item-title="label"
-            item-value="_id"
-            label="Proxy"
-            variant="outlined"
-            density="comfortable"
-            clearable
-          />
+        <v-col cols="12" md="4">
+          <v-text-field v-model="importJsonPath" label="JSON path" variant="outlined" density="comfortable" />
         </v-col>
         <v-col cols="12" md="2">
           <v-select
@@ -167,18 +69,15 @@
             density="comfortable"
           />
         </v-col>
-        <v-col cols="12" md="2">
-          <v-btn color="primary" block :loading="importingTdata" @click="importTdata">Import tdata</v-btn>
-        </v-col>
-        <v-col cols="12" md="2">
-          <v-btn color="secondary" block :loading="importingJson" @click="importJson">Import JSON</v-btn>
+        <v-col cols="12" md="3">
+          <v-btn color="primary" block :loading="importingTdata" @click="importTdata">Import sender</v-btn>
         </v-col>
       </v-row>
     </v-card>
 
     <BulkImportPanel
       title="Bulk import senders (CSV)"
-      hint="Columns: phone, label, role, sessionPath (tdata dir/zip or .json on server), proxyLabel"
+      hint="Columns: phone, label, role, sessionPath (tdata dir/zip on server; optional sibling account.json), proxyLabel"
       button-label="Bulk import"
       :loading="bulkImporting"
       :result-summary="bulkImportSummary"
@@ -187,7 +86,7 @@
 
     <v-progress-circular v-if="loading && rows.length === 0" indeterminate />
     <v-alert v-else-if="!rows.length && !loading" type="info" variant="tonal" density="compact">
-      No sending accounts yet. Add a row above or run <code>npm run cli -- auth login</code>.
+      No sending accounts yet. Import tdata + JSON above.
     </v-alert>
     <v-data-table
       v-else
@@ -350,22 +249,6 @@
               </v-list>
             </v-menu>
           </div>
-          <div class="account-actions__proxy">
-            <v-select
-              :model-value="selectedProxyByAccount[item._id] ?? ''"
-              :items="proxyOptionsForAccount(item._id)"
-              item-title="label"
-              item-value="_id"
-              label="Proxy"
-              variant="outlined"
-              density="compact"
-              hide-details
-              @update:model-value="(v) => setSelectedProxy(item._id, String(v ?? ''))"
-            />
-            <v-btn size="x-small" variant="tonal" color="primary" block @click="assignSelectedMtproxy(item._id)">
-              Assign
-            </v-btn>
-          </div>
         </div>
       </template>
     </v-data-table>
@@ -400,13 +283,6 @@ interface Account {
   dailyLimits?: { msgsToNew?: number; ratePerHour?: number };
   dailyCounters?: { msgsToNew?: number };
 }
-interface RegionRow {
-  countryIso2: string;
-  name: string;
-  timezone: string;
-  windowStart: string;
-  windowEnd: string;
-}
 interface ProxyRow {
   _id: string;
   label: string;
@@ -419,39 +295,16 @@ const toast = useToast();
 const { confirm, confirmDestructive } = useConfirm();
 const rows = ref<Account[]>([]);
 const proxies = ref<ProxyRow[]>([]);
-const selectedProxyByAccount = ref<Record<string, string>>({});
 const loadErr = ref('');
 const loading = ref(true);
-const registering = ref(false);
 const autoAssigning = ref(false);
-const newPhone = ref('');
-const newLabel = ref('');
-const newDeviceModel = ref('');
-const newSystemVersion = ref('');
-const newAppVersion = ref('');
-const newLangCode = ref('');
-const newSystemLangCode = ref('');
-const newTelegramApiId = ref('');
-const newTelegramApiHash = ref('');
 const importingTdata = ref(false);
 const bulkImporting = ref(false);
 const bulkImportSummary = ref('');
-const importingJson = ref(false);
 const importPhone = ref('');
 const importTdataPath = ref('');
 const importJsonPath = ref('');
-const importProxyId = ref('');
 const importRole = ref<'sender' | 'test_recipient'>('sender');
-const newSendingWindowRegion = ref('');
-const regions = ref<RegionRow[]>([]);
-
-const regionItems = computed(() => [
-  { title: 'Auto from phone number', value: '' },
-  ...regions.value.map((r) => ({
-    title: `${r.countryIso2} — ${r.name} (${r.windowStart}–${r.windowEnd}, ${r.timezone})`,
-    value: r.countryIso2,
-  })),
-]);
 
 const headers = [
   fixedCol('Phone', 'phone', 130),
@@ -468,29 +321,11 @@ const headers = [
   fixedCol('Actions', 'actions', 200, { sortable: false, wrap: true }),
 ];
 
-function proxyOptionsForAccount(accountId: string): ProxyRow[] {
-  const usedByOther = new Set(
-    rows.value
-      .filter((a) => a._id !== accountId && a.proxyId)
-      .map((a) => String(a.proxyId)),
-  );
-  return proxies.value.filter((p) => !usedByOther.has(p._id));
-}
-
 function activeHoursTitle(item: Account): string {
   const sw = item.sendingWindow;
   if (!sw) return '';
   const quiet = item.sendingQuietUntil ? ` · ${item.sendingQuietUntil}` : '';
   return `${sw.start}–${sw.end} ${sw.timezone}${quiet}`;
-}
-
-async function loadRegions(): Promise<void> {
-  try {
-    const data = await apiFetch<{ regions: RegionRow[] }>('/api/regions/sending-windows');
-    regions.value = data.regions ?? [];
-  } catch {
-    regions.value = [];
-  }
 }
 
 function proxyLabel(proxyId?: string | null): string {
@@ -499,19 +334,12 @@ function proxyLabel(proxyId?: string | null): string {
   return p ? `${p.label} (${p.country || '—'})` : String(proxyId);
 }
 
-function setSelectedProxy(accountId: string, proxyId: string): void {
-  selectedProxyByAccount.value[accountId] = proxyId;
-}
-
 async function load(): Promise<void> {
   try {
     loadErr.value = '';
     const [a, p] = await Promise.all([apiFetch<Account[]>('/api/accounts'), apiFetch<ProxyRow[]>('/api/proxies')]);
     rows.value = a;
     proxies.value = p.filter((x) => x.type === 'mtproto');
-    for (const acc of rows.value) {
-      selectedProxyByAccount.value[acc._id] = acc.proxyId ? String(acc.proxyId) : '';
-    }
   } catch (e) {
     loadErr.value = errorText(e);
   } finally {
@@ -520,59 +348,6 @@ async function load(): Promise<void> {
 }
 
 const { running: polling, refresh } = usePolling(load, { intervalMs: 10000 });
-
-onMounted(() => {
-  void loadRegions();
-});
-
-async function registerShell(): Promise<void> {
-  const phone = newPhone.value.trim();
-  if (!phone || phone.length < 8) {
-    toast.warning('Enter a full international number (e.g. +14155552671).');
-    return;
-  }
-  registering.value = true;
-  try {
-    const apiIdRaw = newTelegramApiId.value.trim();
-    const apiId = apiIdRaw ? parseInt(apiIdRaw, 10) : undefined;
-    const apiHash = newTelegramApiHash.value.trim();
-    await apiFetch('/api/accounts', {
-      method: 'POST',
-      body: JSON.stringify({
-        phone,
-        label: newLabel.value.trim(),
-        ...(newSendingWindowRegion.value.trim()
-          ? { sendingWindowRegion: newSendingWindowRegion.value.trim().toUpperCase() }
-          : {}),
-        ...(typeof apiId === 'number' && !Number.isNaN(apiId) && apiId > 0 && apiHash
-          ? { telegramApiId: apiId, telegramApiHash: apiHash }
-          : {}),
-        deviceProfile: {
-          deviceModel: newDeviceModel.value.trim(),
-          systemVersion: newSystemVersion.value.trim(),
-          appVersion: newAppVersion.value.trim(),
-          langCode: newLangCode.value.trim(),
-          systemLangCode: newSystemLangCode.value.trim(),
-        },
-      }),
-    });
-    newPhone.value = '';
-    newLabel.value = '';
-    newDeviceModel.value = '';
-    newSystemVersion.value = '';
-    newAppVersion.value = '';
-    newLangCode.value = '';
-    newSystemLangCode.value = '';
-    newTelegramApiId.value = '';
-    newTelegramApiHash.value = '';
-    toast.success('Saved. Add MTProto session via CLI auth login or POST /api/accounts/:id/session.');
-    await load();
-  } catch (e) {
-    toast.error(errorText(e));
-  } finally {
-    registering.value = false;
-  }
-}
 
 async function importTdata(): Promise<void> {
   if (!importTdataPath.value.trim() || !importJsonPath.value.trim()) {
@@ -587,42 +362,15 @@ async function importTdata(): Promise<void> {
         ...(importPhone.value.trim() ? { phone: importPhone.value.trim() } : {}),
         tdataPath: importTdataPath.value.trim(),
         jsonPath: importJsonPath.value.trim(),
-        proxyId: importProxyId.value.trim() || undefined,
         role: importRole.value,
       }),
     });
-    toast.success('tdata imported and verified.');
+    toast.success('Sender imported and verified.');
   } catch (e) {
     toast.error(errorText(e));
     console.error('import tdata failed', e);
   } finally {
     importingTdata.value = false;
-    await load();
-  }
-}
-
-async function importJson(): Promise<void> {
-  if (!importJsonPath.value.trim()) {
-    toast.warning('JSON path is required.');
-    return;
-  }
-  importingJson.value = true;
-  try {
-    await apiFetch('/api/accounts/import-json', {
-      method: 'POST',
-      body: JSON.stringify({
-        jsonPath: importJsonPath.value.trim(),
-        phone: importPhone.value.trim() || undefined,
-        proxyId: importProxyId.value.trim() || undefined,
-        role: importRole.value,
-      }),
-    });
-    toast.success('JSON account imported.');
-  } catch (e) {
-    toast.error(errorText(e));
-    console.error('import json failed', e);
-  } finally {
-    importingJson.value = false;
     await load();
   }
 }
@@ -664,24 +412,6 @@ async function setRole(id: string, role: string): Promise<void> {
   try {
     await apiFetch(`/api/accounts/${id}`, { method: 'PATCH', body: JSON.stringify({ role }) });
     toast.success(`Role set to ${role}.`);
-    await load();
-  } catch (e) {
-    toast.error(errorText(e));
-  }
-}
-
-async function assignSelectedMtproxy(accountId: string): Promise<void> {
-  const proxyId = (selectedProxyByAccount.value[accountId] ?? '').trim();
-  if (!proxyId) {
-    toast.warning('Select MTProxy first.');
-    return;
-  }
-  try {
-    await apiFetch(`/api/accounts/${accountId}/assign-mtproxy`, {
-      method: 'POST',
-      body: JSON.stringify({ proxyId }),
-    });
-    toast.success('MTProxy assigned.');
     await load();
   } catch (e) {
     toast.error(errorText(e));

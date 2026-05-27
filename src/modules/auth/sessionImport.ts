@@ -9,7 +9,6 @@ import { resolveSendingWindowForNewAccount } from '../accounts/regionalSendingWi
 import { logSessionEvent } from './sessionEvents';
 import { buildGramJsStringSessionV1 } from './gramJsStringSession';
 import { connectWithSavedSession } from './connect';
-import { assertMtProxyPolicy } from '../proxy/policy';
 
 export interface ImportSessionOptions {
   label?: string;
@@ -66,7 +65,6 @@ export async function importSessionString(
   const proxyDoc = opts.proxyId
     ? await ProxyModel.findById(new Types.ObjectId(opts.proxyId))
     : null;
-  assertMtProxyPolicy({ phone }, proxyDoc);
 
   const apiFromOpts =
     typeof opts.telegramApiId === 'number' &&

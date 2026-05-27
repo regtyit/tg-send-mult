@@ -154,7 +154,6 @@ export const accountImportTdataBody = z
     phone: phoneE164.optional(),
     tdataPath: z.string().trim().min(1).max(4000),
     jsonPath: z.string().trim().min(1).max(4000),
-    proxyId: objectIdString.optional(),
     label: z.string().trim().max(200).optional(),
     role: z.enum(['sender', 'test_recipient']).optional(),
   })
