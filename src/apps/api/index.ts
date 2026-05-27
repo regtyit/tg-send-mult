@@ -9,7 +9,7 @@ import { BullMQAdapter } from '@bull-board/api/bullMQAdapter';
 import { FastifyAdapter } from '@bull-board/fastify';
 import { Types } from 'mongoose';
 import { config } from '../../config';
-import { phoneCountryIso2 } from '../../modules/accounts/phoneCountry';
+import { phoneCountryIso2, normalizePhoneE164 } from '../../modules/accounts/phoneCountry';
 import {
   claimMtProxyForAccount,
   ensureProxyNotUsedByAnotherAccount,
@@ -432,21 +432,25 @@ async function main() {
         const body = validate(reply, accountImportTdataBody, req.body);
         if (!body) return;
         const jsonMeta = readJsonAccountMetadata(body.jsonPath, body.phone);
-        const phone = (body.phone?.trim() || jsonMeta.phone || '').trim();
+        const phoneRaw = (body.phone?.trim() || jsonMeta.phone || '').trim();
+        const phone = normalizePhoneE164(phoneRaw);
         if (!phone) {
           return reply.code(400).send({
             error: 'phone_required',
             message: 'Phone is required (form field or in JSON metadata).',
           });
         }
-        const imported = await importAccountWithRollback(phone, () =>
-          importSessionFromTdata(phone, body.tdataPath, {
-            label: body.label || jsonMeta.label,
-            deviceProfile: jsonMeta.deviceProfile,
-            ...(jsonMeta.telegramApiId && jsonMeta.telegramApiHash
-              ? { telegramApiId: jsonMeta.telegramApiId, telegramApiHash: jsonMeta.telegramApiHash }
-              : {}),
-          }),
+        const imported = await importAccountWithRollback(
+          phone,
+          () =>
+            importSessionFromTdata(phone, body.tdataPath, {
+              label: body.label || jsonMeta.label,
+              deviceProfile: jsonMeta.deviceProfile,
+              ...(jsonMeta.telegramApiId && jsonMeta.telegramApiHash
+                ? { telegramApiId: jsonMeta.telegramApiId, telegramApiHash: jsonMeta.telegramApiHash }
+                : {}),
+            }),
+          { preserveNewAccountOnFailure: true },
         );
         if (body.role) {
           await AccountModel.findByIdAndUpdate(imported._id, { $set: { role: body.role } });
@@ -466,19 +470,23 @@ async function main() {
         const body = validate(reply, accountImportJsonBody, req.body);
         if (!body) return;
         const meta = readJsonAccountMetadata(body.jsonPath);
-        const phone = (body.phone?.trim() || meta.phone || '').trim();
+        const phoneRaw = (body.phone?.trim() || meta.phone || '').trim();
+        const phone = normalizePhoneE164(phoneRaw);
         if (!phone) {
           return reply.code(400).send({
             error: 'phone_required',
             message: 'Phone is required (form field or in JSON metadata).',
           });
         }
-        const imported = await importAccountWithRollback(phone, () =>
-          importAccountFromJsonFile(body.jsonPath, {
-            phone: body.phone,
-            proxyId: body.proxyId,
-            label: body.label,
-          }),
+        const imported = await importAccountWithRollback(
+          phone,
+          () =>
+            importAccountFromJsonFile(body.jsonPath, {
+              phone,
+              proxyId: body.proxyId,
+              label: body.label,
+            }),
+          { preserveNewAccountOnFailure: true },
         );
         if (body.role) {
           await AccountModel.findByIdAndUpdate(imported._id, { $set: { role: body.role } });

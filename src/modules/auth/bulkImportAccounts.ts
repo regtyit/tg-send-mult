@@ -4,6 +4,7 @@ import { AccountModel, ProxyModel } from '../../db/models';
 import { resolveImportPath } from '../../util/resolveImportPath';
 import { importAccountFromJsonFile, readJsonAccountMetadata } from './jsonImport';
 import { importSessionFromTdata } from './tdataImport';
+import { normalizePhoneE164 } from '../accounts/phoneCountry';
 
 export interface AccountBulkRow {
   phone?: string;
@@ -115,7 +116,7 @@ export async function bulkImportAccountsFromCsv(
       if (stat.isDirectory() || resolvedSessionPath.toLowerCase().endsWith('.zip')) {
         const jsonPath = findSiblingJsonMetadata(resolvedSessionPath);
         const jsonMeta = jsonPath ? readJsonAccountMetadata(jsonPath, phone || undefined) : null;
-        effectivePhone = (phone || jsonMeta?.phone || '').trim();
+        effectivePhone = normalizePhoneE164((phone || jsonMeta?.phone || '').trim());
         if (!effectivePhone) {
           failed++;
           results.push({
@@ -136,7 +137,7 @@ export async function bulkImportAccountsFromCsv(
         accountId = String(acc._id);
       } else if (ext === '.json') {
         const acc = await importAccountFromJsonFile(resolvedSessionPath, {
-          phone: phone || undefined,
+          phone: phone ? normalizePhoneE164(phone) : undefined,
           label,
           proxyId,
         });

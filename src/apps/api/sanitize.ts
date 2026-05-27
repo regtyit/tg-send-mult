@@ -41,10 +41,16 @@ export function sanitizeAccount(doc: unknown): Record<string, unknown> | null {
   const sw = obj.sendingWindow as AccountDoc['sendingWindow'] | undefined;
   if (sw && typeof sw === 'object') {
     out.sendingWindow = sw;
-    const inWindow = isWithinSendingWindowAccount({ sendingWindow: sw } as AccountDoc);
-    out.sendingActiveNow = inWindow;
-    if (!inWindow) {
-      out.sendingQuietUntil = `Outside local window ${sw.start}–${sw.end} (${sw.timezone})`;
+    try {
+      const inWindow = isWithinSendingWindowAccount({ sendingWindow: sw } as AccountDoc);
+      out.sendingActiveNow = inWindow;
+      if (!inWindow) {
+        out.sendingQuietUntil = `Outside local window ${sw.start}–${sw.end} (${sw.timezone})`;
+      }
+    } catch (err) {
+      logger.warn({ err, accountId: obj._id }, 'api: sending window check failed; defaulting to unknown');
+      out.sendingActiveNow = false;
+      out.sendingQuietUntil = 'Could not evaluate quiet hours (check timezone / HH:MM)';
     }
   }
   const { eligible, reasons } = describeSenderEligibility({

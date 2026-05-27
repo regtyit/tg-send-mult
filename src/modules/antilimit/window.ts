@@ -44,15 +44,28 @@ function safeParseWithFallback(
 }
 
 function minutesInTz(now: Date, timeZone: string): number {
-  const parts = new Intl.DateTimeFormat('en-GB', {
-    timeZone,
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  }).formatToParts(now);
-  const hour = parseInt(parts.find((p) => p.type === 'hour')?.value ?? '0', 10);
-  const minute = parseInt(parts.find((p) => p.type === 'minute')?.value ?? '0', 10);
-  return hour * 60 + minute;
+  try {
+    const parts = new Intl.DateTimeFormat('en-GB', {
+      timeZone,
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    }).formatToParts(now);
+    const hour = parseInt(parts.find((p) => p.type === 'hour')?.value ?? '0', 10);
+    const minute = parseInt(parts.find((p) => p.type === 'minute')?.value ?? '0', 10);
+    return hour * 60 + minute;
+  } catch {
+    /** Invalid IANA timezone (bad import / manual PATCH) — avoid breaking API list. */
+    const parts = new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'UTC',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    }).formatToParts(now);
+    const hour = parseInt(parts.find((p) => p.type === 'hour')?.value ?? '0', 10);
+    const minute = parseInt(parts.find((p) => p.type === 'minute')?.value ?? '0', 10);
+    return hour * 60 + minute;
+  }
 }
 
 export function isWithinSendingWindowAccount(account: AccountDoc, now = new Date()): boolean {
