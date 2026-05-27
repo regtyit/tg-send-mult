@@ -31,13 +31,22 @@ export async function importAccountWithRollback(
     importedId = account._id;
     return account;
   } catch (err) {
-    if (options?.preserveNewAccountOnFailure && !existedBefore && importedId) {
-      const acc = await AccountModel.findById(importedId).lean();
-      const hasSession = typeof acc?.sessionEnc === 'string' && acc.sessionEnc.trim().length > 0;
-      if (hasSession) {
+    if (options?.preserveNewAccountOnFailure && !existedBefore) {
+      /**
+       * `run()` often persists the account (session row) before verify/connect throws.
+       * In that case `importedId` was never set because assignment happens only after
+       * `run()` resolves. Look up the newest row for this phone so we do not run
+       * `rollbackNewAccountOnVerifyFail` → deleteOne({ phone }) and wipe the import.
+       */
+      const row =
+        (importedId
+          ? await AccountModel.findById(importedId).lean()
+          : await AccountModel.findOne({ phone: trimmed }).sort({ createdAt: -1 }).lean()) ?? null;
+      const hasSession = typeof row?.sessionEnc === 'string' && row.sessionEnc.trim().length > 0;
+      if (hasSession && row?._id) {
         const code = err instanceof TgDomainError ? err.code : 'import_verify_failed';
         const message = err instanceof Error ? err.message : String(err);
-        await AccountModel.findByIdAndUpdate(importedId, {
+        await AccountModel.findByIdAndUpdate(row._id, {
           $set: {
             status: 'new',
             proxyId: null,

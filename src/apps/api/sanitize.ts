@@ -53,17 +53,23 @@ export function sanitizeAccount(doc: unknown): Record<string, unknown> | null {
       out.sendingQuietUntil = 'Could not evaluate quiet hours (check timezone / HH:MM)';
     }
   }
-  const { eligible, reasons } = describeSenderEligibility({
-    sessionEnc: typeof obj.sessionEnc === 'string' ? obj.sessionEnc : '',
-    role: typeof obj.role === 'string' ? obj.role : 'sender',
-    status: typeof obj.status === 'string' ? obj.status : 'new',
-    healthScore: typeof obj.healthScore === 'number' ? obj.healthScore : 0,
-    floodWaitUntil: obj.floodWaitUntil instanceof Date ? obj.floodWaitUntil : null,
-    quarantineUntil: obj.quarantineUntil instanceof Date ? obj.quarantineUntil : null,
-  });
-  out.sendable = eligible;
-  if (!eligible && reasons.length) {
-    out.sendBlockReason = formatEligibilityReasons(reasons);
+  try {
+    const { eligible, reasons } = describeSenderEligibility({
+      sessionEnc: typeof obj.sessionEnc === 'string' ? obj.sessionEnc : '',
+      role: typeof obj.role === 'string' ? obj.role : 'sender',
+      status: typeof obj.status === 'string' ? obj.status : 'new',
+      healthScore: typeof obj.healthScore === 'number' ? obj.healthScore : 0,
+      floodWaitUntil: obj.floodWaitUntil instanceof Date ? obj.floodWaitUntil : null,
+      quarantineUntil: obj.quarantineUntil instanceof Date ? obj.quarantineUntil : null,
+    });
+    out.sendable = eligible;
+    if (!eligible && reasons.length) {
+      out.sendBlockReason = formatEligibilityReasons(reasons);
+    }
+  } catch (err) {
+    logger.warn({ err, accountId: obj._id }, 'api: sender eligibility check failed');
+    out.sendable = false;
+    out.sendBlockReason = 'Could not evaluate send eligibility';
   }
   for (const key of ACCOUNT_SENSITIVE_FIELDS) {
     delete out[key];
