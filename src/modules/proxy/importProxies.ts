@@ -2,6 +2,7 @@ import { ProxyModel } from '../../db/models';
 import type { ProxyDoc } from '../../db/models/Proxy';
 import { coerceMtProxyImportFields, proxyDocToTelethonPayload } from '../../telegram/proxyPayload';
 import { parseBulkInput } from '../import/parseBulk';
+import { coerceSocksHttpImportFields } from './parseSocksHttpProxy';
 
 export interface ProxyImportRow extends Record<string, unknown> {
   label?: string;
@@ -83,16 +84,17 @@ export async function importProxiesFromBulk(input: {
       host = c.host;
       port = c.port;
       secret = c.secret;
-    } else if (!host.includes('://') && !host.includes('/') && !host.includes('?')) {
-      const lastColon = host.lastIndexOf(':');
-      if (lastColon > 0) {
-        const tail = host.slice(lastColon + 1);
-        const p = Number.parseInt(tail, 10);
-        if (/^\d+$/.test(tail) && Number.isInteger(p) && p > 0 && p <= 65535) {
-          host = host.slice(0, lastColon).trim();
-          port = p;
-        }
-      }
+    } else {
+      const coerced = coerceSocksHttpImportFields({
+        host,
+        port: Number.isInteger(port) && port > 0 ? port : 8080,
+        login,
+        password,
+      });
+      host = coerced.host;
+      port = coerced.port;
+      if (coerced.login) login = coerced.login;
+      if (coerced.password) password = coerced.password;
     }
 
     if (!host || !Number.isInteger(port) || port <= 0 || port > 65535) {

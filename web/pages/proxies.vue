@@ -34,10 +34,15 @@
           <v-text-field
             v-model="host"
             label="Host"
-            :hint="type === 'mtproto' ? 'IP/hostname, or paste t.me / tg:// proxy link (e.g. from QR)' : undefined"
-            :persistent-hint="type === 'mtproto'"
+            :hint="
+              type === 'mtproto'
+                ? 'IP/hostname, or paste t.me / tg:// proxy link (e.g. from QR)'
+                : 'IP or hostname, or paste host:port:login:password'
+            "
+            :persistent-hint="type === 'http' || type === 'socks5'"
             variant="outlined"
             density="comfortable"
+            @blur="onHostBlurParseCredentials"
           />
         </v-col>
         <v-col cols="12" md="2">
@@ -80,7 +85,7 @@
 
     <BulkImportPanel
       title="Bulk import proxies"
-      hint="CSV/JSON: label, type (mtproto|socks5|http), host, port, country, secret, login, password. MTProto: paste t.me/proxy?… in host or secret, or host as host:port; classic 16-byte keys are 32 hex chars (even if they start with ee)."
+      hint="CSV/JSON: label, type (mtproto|socks5|http), host, port, country, secret, login, password. HTTP/SOCKS5: host may be host:port:login:password. MTProto: paste t.me/proxy?… in host or secret, or host:port."
       button-label="Import proxies"
       :loading="bulkImporting"
       :result-summary="bulkImportSummary"
@@ -255,6 +260,7 @@
 </template>
 
 <script setup lang="ts">
+import { parseSocksHttpProxyLine } from '@repo/modules/proxy/parseSocksHttpProxy';
 import { coerceMtProxyImportFields, tryParseTelegramProxyLink } from '@repo/telegram/proxyParse';
 import { errorText } from '~/composables/useToast';
 import { DATA_TABLE_CLASS, fixedCol } from '~/utils/tableColumns';
@@ -318,6 +324,19 @@ const bulkImportSummary = ref('');
 const testAfterImport = ref(false);
 const testingAll = ref(false);
 const qrFileInput = ref<HTMLInputElement | null>(null);
+
+function onHostBlurParseCredentials(): void {
+  if (type.value === 'mtproto') return;
+  const parsed = parseSocksHttpProxyLine(host.value.trim());
+  if (!parsed) return;
+  host.value = parsed.host;
+  port.value = String(parsed.port);
+  if (parsed.login) login.value = parsed.login;
+  if (parsed.password) password.value = parsed.password;
+  if (type.value !== 'http' && type.value !== 'socks5') {
+    type.value = 'http';
+  }
+}
 
 function applyCoerceToAddForm(): { host: string; port: number; secret: string } | null {
   if (type.value !== 'mtproto') return null;
@@ -491,6 +510,16 @@ async function addProxy(): Promise<void> {
     host.value = c.host;
     port.value = String(c.port);
     secret.value = c.secret;
+  } else {
+    const parsed = parseSocksHttpProxyLine(hostTrim);
+    if (parsed) {
+      hostTrim = parsed.host;
+      portNum = parsed.port;
+      if (parsed.login) login.value = parsed.login;
+      if (parsed.password) password.value = parsed.password;
+      host.value = parsed.host;
+      port.value = String(parsed.port);
+    }
   }
 
   if (!hostTrim || !Number.isFinite(portNum) || portNum <= 0 || portNum > 65535) {

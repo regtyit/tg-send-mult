@@ -539,8 +539,19 @@ async function main() {
           });
           return sanitizeProxy(created);
         }
+        const { coerceSocksHttpImportFields } = await import('../../modules/proxy/parseSocksHttpProxy');
+        const coerced = coerceSocksHttpImportFields({
+          host: body.host,
+          port: body.port,
+          login: body.login,
+          password: body.password,
+        });
         const created = await ProxyModel.create({
           ...body,
+          host: coerced.host,
+          port: coerced.port,
+          login: coerced.login,
+          password: coerced.password,
           country: (body.country ?? '').trim().toUpperCase(),
         });
         return sanitizeProxy(created);
@@ -568,16 +579,18 @@ async function main() {
           patch.port = c.port;
           patch.secret = c.secret;
         } else if (typeof body.host === 'string' && effType !== 'mtproto') {
-          const h = body.host.trim();
-          const lastColon = h.lastIndexOf(':');
-          if (lastColon > 0 && !h.includes('://') && !h.includes('/') && !h.includes('?')) {
-            const tail = h.slice(lastColon + 1);
-            const p = Number.parseInt(tail, 10);
-            if (/^\d+$/.test(tail) && Number.isInteger(p) && p > 0 && p <= 65535) {
-              patch.host = h.slice(0, lastColon).trim();
-              patch.port = p;
-            }
-          }
+          const { coerceSocksHttpImportFields } = await import('../../modules/proxy/parseSocksHttpProxy');
+          const coerced = coerceSocksHttpImportFields({
+            host: body.host,
+            port: body.port !== undefined ? body.port : Number(existing.port ?? 8080),
+            login: body.login !== undefined ? String(body.login) : String(existing.login ?? ''),
+            password:
+              body.password !== undefined ? String(body.password) : String(existing.password ?? ''),
+          });
+          patch.host = coerced.host;
+          patch.port = coerced.port;
+          patch.login = coerced.login;
+          patch.password = coerced.password;
         }
         if (effectiveType && effectiveType !== 'mtproto') {
           patch.secret = '';

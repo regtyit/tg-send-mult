@@ -182,12 +182,31 @@ export async function registerDialogRoutes(r: FastifyInstance): Promise<void> {
     return doc.toObject();
   });
 
-  r.post('/dialog-sessions/warmup-run', async (req) => {
-    const body = (req.body as { dryRun?: boolean; limit?: number }) ?? {};
+  r.post('/dialog-sessions/warmup-run', async (req, reply) => {
+    const body =
+      (req.body as {
+        dryRun?: boolean;
+        limit?: number;
+        accountIds?: string[];
+        requireDue?: boolean;
+        requireInWindow?: boolean;
+      }) ?? {};
+    const accountIds = Array.isArray(body.accountIds)
+      ? body.accountIds.map((id) => String(id).trim()).filter(Boolean)
+      : undefined;
+    if (accountIds?.length && accountIds.length % 2 !== 0) {
+      return reply.code(400).send({
+        error: 'even_account_count_required',
+        message: 'Select an even number of warming accounts to pair (2, 4, 6, …).',
+      });
+    }
     const result = await runWarmupOrchestrator({
       dryRun: Boolean(body.dryRun),
-      limit: typeof body.limit === 'number' ? body.limit : 10,
+      limit: typeof body.limit === 'number' ? body.limit : accountIds?.length ? accountIds.length : 10,
       autoStart: true,
+      accountIds,
+      requireDue: body.requireDue,
+      requireInWindow: body.requireInWindow,
     });
     return result;
   });

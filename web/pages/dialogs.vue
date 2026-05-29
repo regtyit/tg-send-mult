@@ -40,6 +40,76 @@
     </v-alert>
 
     <v-card class="mb-6 pa-4" variant="outlined">
+      <v-card-title class="text-subtitle-1 px-0 pt-0 d-flex align-center flex-wrap ga-2">
+        Warm-up senders
+        <v-spacer />
+        <v-chip v-if="warmingSummary" size="small" variant="tonal">
+          {{ warmingSummary.warmingCount }} warming · {{ warmingSummary.dueCount }} due now
+        </v-chip>
+      </v-card-title>
+      <p class="text-caption text-medium-emphasis mb-3">
+        Select warming accounts (even count) and run automatic two-way dialog sessions. Needs
+        <code>dev:worker</code> + <code>dev:scheduler</code>. Recommended: {{ readinessRecommended }}
+        completed dialogs per account.
+      </p>
+      <v-alert v-if="!warmingAccounts.length" type="info" variant="tonal" density="compact" class="mb-3">
+        No accounts in <strong>warming</strong> status. Import senders on the Senders page first.
+      </v-alert>
+      <v-data-table
+        v-else
+        v-model="selectedWarmingIds"
+        :headers="warmingHeaders"
+        :items="warmingAccounts"
+        :class="DATA_TABLE_CLASS"
+        density="compact"
+        item-value="_id"
+        show-select
+        class="mb-3"
+      >
+        <template #[`item.readiness`]="{ item }">
+          {{ item.readinessDialogsCompleted ?? 0 }}/{{ item.readinessDialogsRecommended ?? readinessRecommended }}
+          <v-chip v-if="item.warming?.readinessMet" size="x-small" color="success" variant="tonal" class="ml-1">
+            ready
+          </v-chip>
+        </template>
+        <template #[`item.schedule`]="{ item }">
+          <v-chip v-if="item.warming?.warmupDialogDue" size="x-small" color="primary" variant="tonal">due</v-chip>
+          <span v-else class="text-caption text-medium-emphasis">—</span>
+        </template>
+        <template #[`item.active`]="{ item }">
+          <v-chip
+            size="x-small"
+            :color="item.sendingActiveNow ? 'success' : 'warning'"
+            variant="tonal"
+          >
+            {{ item.sendingActiveNow ? 'yes' : 'quiet' }}
+          </v-chip>
+        </template>
+      </v-data-table>
+      <div class="d-flex flex-wrap gap-2 align-center">
+        <v-btn
+          color="primary"
+          :loading="runningWarmupOrchestrator"
+          :disabled="selectedWarmingIds.length < 2 || selectedWarmingIds.length % 2 !== 0"
+          @click="warmSelectedAccounts"
+        >
+          Start warm-up for selected ({{ selectedWarmingIds.length }})
+        </v-btn>
+        <v-btn
+          variant="tonal"
+          :loading="runningWarmupOrchestrator"
+          :disabled="!warmingSummary?.dueCount"
+          @click="runScheduledWarmup"
+        >
+          Auto-pair all due senders
+        </v-btn>
+        <span v-if="selectedWarmingIds.length % 2 !== 0" class="text-caption text-warning">
+          Select an even number of accounts (pairs).
+        </span>
+      </div>
+    </v-card>
+
+    <v-card class="mb-6 pa-4" variant="outlined">
       <v-card-title class="text-subtitle-1 px-0 pt-0">Human dialog templates</v-card-title>
       <p class="text-caption text-medium-emphasis mb-2">
         {{ dialogPresets.length }} ready-made scripts (EN + RU). Choose one to preview, load in the builder, or use in a session.
@@ -449,6 +519,7 @@ const accounts = ref<
     readinessDialogsCompleted?: number;
     readinessDialogsRecommended?: number;
     readinessMet?: boolean;
+    sendingActiveNow?: boolean;
     warming?: WarmingStatusView | null;
   }>
 >([]);
@@ -474,6 +545,26 @@ const creatingSession = ref(false);
 const runningWarmupOrchestrator = ref(false);
 const readinessRecommended = ref(3);
 const warmingPreview = ref<WarmingPreview | null>(null);
+const selectedWarmingIds = ref<string[]>([]);
+const warmingSummary = ref<{ warmingCount: number; dueCount: number; readinessMetCount: number } | null>(
+  null,
+);
+
+const warmingHeaders = [
+  { title: 'Account', key: 'label' },
+  { title: 'Readiness', key: 'readiness', sortable: false },
+  { title: 'Schedule', key: 'schedule', sortable: false },
+  { title: 'Active hours', key: 'active', sortable: false },
+];
+
+const warmingAccounts = computed(() =>
+  accounts.value
+    .filter((a) => a.status === 'warming' && (a.role === 'sender' || !a.role))
+    .map((a) => ({
+      ...a,
+      label: accountPickerLabel(a),
+    })),
+);
 
 const selectedSessionId = ref('');
 const loadingTranscript = ref(false);
@@ -580,16 +671,61 @@ function applySuggestedPreset(slug: string): void {
 async function runScheduledWarmup(): Promise<void> {
   runningWarmupOrchestrator.value = true;
   try {
-    const r = await apiFetch<{ created: number; started: number; skipped: number }>(
+    const r = await apiFetch<{ created: number; started: number; skipped: number; plans: unknown[] }>(
       '/api/dialog-sessions/warmup-run',
-      { method: 'POST', body: JSON.stringify({ limit: 10 }) },
+      { method: 'POST', body: JSON.stringify({ limit: 20, requireDue: true }) },
     );
-    toast.success(`Warm-up run: ${r.created} created, ${r.started} started.`);
+    toast.success(`Warm-up: ${r.created} sessions created, ${r.started} started.`);
     await loadAll();
+    await loadWarmingSummary();
   } catch (e) {
     toast.error(errorText(e));
   } finally {
     runningWarmupOrchestrator.value = false;
+  }
+}
+
+async function warmSelectedAccounts(): Promise<void> {
+  const ids = [...selectedWarmingIds.value];
+  if (ids.length < 2 || ids.length % 2 !== 0) {
+    toast.warning('Select an even number of warming accounts (2, 4, 6, …).');
+    return;
+  }
+  runningWarmupOrchestrator.value = true;
+  try {
+    const r = await apiFetch<{ created: number; started: number; skipped: number }>(
+      '/api/dialog-sessions/warmup-run',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          accountIds: ids,
+          requireDue: false,
+          requireInWindow: false,
+          limit: ids.length,
+        }),
+      },
+    );
+    toast.success(`Warm-up started: ${r.created} sessions, ${r.started} running.`);
+    selectedWarmingIds.value = [];
+    await loadAll();
+    await loadWarmingSummary();
+  } catch (e) {
+    toast.error(errorText(e));
+  } finally {
+    runningWarmupOrchestrator.value = false;
+  }
+}
+
+async function loadWarmingSummary(): Promise<void> {
+  try {
+    const list = warmingAccounts.value;
+    warmingSummary.value = {
+      warmingCount: list.length,
+      dueCount: list.filter((a) => a.warming?.warmupDialogDue).length,
+      readinessMetCount: list.filter((a) => a.warming?.readinessMet).length,
+    };
+  } catch {
+    warmingSummary.value = null;
   }
 }
 
@@ -998,6 +1134,7 @@ async function loadTranscript(): Promise<void> {
 
 const { start: startPoll, stop: stopPoll } = usePolling(async () => {
   await loadAll();
+  await loadWarmingSummary();
   if (selectedSessionId.value) await loadTranscript();
 }, 5000);
 
@@ -1009,6 +1146,7 @@ onMounted(async () => {
     /* keep default */
   }
   await Promise.all([loadPresets(), loadAll()]);
+  await loadWarmingSummary();
   startPoll();
 });
 onUnmounted(() => stopPoll());

@@ -34,19 +34,88 @@ function accountLabel(a: Pick<AccountDoc, 'phone' | 'label'>): string {
   return a.label?.trim() || a.phone;
 }
 
+export interface PlanWarmupOptions {
+  /** Only these account ids (must be warming senders). */
+  accountIds?: string[];
+  /** When false, include selected accounts even if schedule says not due yet. */
+  requireDue?: boolean;
+  /** When false, allow pairing outside active sending window. */
+  requireInWindow?: boolean;
+}
+
+function buildPairPlan(a: AccountDoc, b: AccountDoc, at: Date): WarmupPairPlan | null {
+  const suggestion = suggestWarmupPreset(a);
+  if (!suggestion) return null;
+  return {
+    accountAId: String(a._id),
+    accountBId: String(b._id),
+    presetSlug: suggestion.slug,
+    presetName: suggestion.name,
+    due: isWarmupDialogDue(a, at),
+  };
+}
+
+/** Pair explicit account ids (even count); order preserved. */
+export function planWarmupForAccountIds(
+  accounts: AccountDoc[],
+  orderedIds: string[],
+  at: Date = new Date(),
+): WarmupPairPlan[] {
+  const byId = new Map(accounts.map((a) => [String(a._id), a]));
+  const plans: WarmupPairPlan[] = [];
+  for (let i = 0; i + 1 < orderedIds.length; i += 2) {
+    const a = byId.get(orderedIds[i]!);
+    const b = byId.get(orderedIds[i + 1]!);
+    if (!a || !b) continue;
+    const plan = buildPairPlan(a, b, at);
+    if (plan) plans.push(plan);
+  }
+  return plans;
+}
+
 /** List warming senders due for a dialog and propose peer pairs + presets. */
-export async function planWarmupDialogPairs(at: Date = new Date()): Promise<WarmupPairPlan[]> {
-  const warming = await AccountModel.find({
+export async function planWarmupDialogPairs(
+  at: Date = new Date(),
+  opts: PlanWarmupOptions = {},
+): Promise<WarmupPairPlan[]> {
+  const filter: Record<string, unknown> = {
     status: 'warming',
     sessionEnc: { $ne: '' },
     role: { $in: ['sender', null] },
-  })
+  };
+  if (opts.accountIds?.length) {
+    filter._id = { $in: opts.accountIds.map((id) => new Types.ObjectId(id)) };
+  }
+
+  const warming = await AccountModel.find(filter)
     .select(
       'phone label warmingScriptDaysCompleted warmingUsedPresetSlugs deviceProfile warmingStartedAt warmupSchedule sendingWindow warmingLastScriptDay',
     )
     .lean();
 
-  const due = warming.filter((a) => isWarmupDialogDue(a, at) && isWithinSendingWindowAccount(a as AccountDoc, at));
+  if (opts.accountIds?.length) {
+    const requireDue = opts.requireDue !== false;
+    const requireInWindow = opts.requireInWindow !== false;
+    const eligibleIds = new Set(
+      warming
+        .filter((a) => {
+          if (requireDue && !isWarmupDialogDue(a, at)) return false;
+          if (requireInWindow && !isWithinSendingWindowAccount(a as AccountDoc, at)) return false;
+          return true;
+        })
+        .map((a) => String(a._id)),
+    );
+    const ordered = opts.accountIds.filter((id) => eligibleIds.has(id));
+    return planWarmupForAccountIds(warming as AccountDoc[], ordered, at);
+  }
+
+  const due = warming.filter((a) => {
+    if (opts.requireDue === false || isWarmupDialogDue(a, at)) {
+      if (opts.requireInWindow === false) return true;
+      return isWithinSendingWindowAccount(a as AccountDoc, at);
+    }
+    return false;
+  });
   const plans: WarmupPairPlan[] = [];
   const used = new Set<string>();
 
@@ -64,16 +133,10 @@ export async function planWarmupDialogPairs(at: Date = new Date()): Promise<Warm
     if (!peer) continue;
 
     const bId = String(peer._id);
-    const suggestion = suggestWarmupPreset(a);
-    if (!suggestion) continue;
+    const plan = buildPairPlan(a as AccountDoc, peer as AccountDoc, at);
+    if (!plan) continue;
 
-    plans.push({
-      accountAId: aId,
-      accountBId: bId,
-      presetSlug: suggestion.slug,
-      presetName: suggestion.name,
-      due: true,
-    });
+    plans.push(plan);
     used.add(aId);
     used.add(bId);
   }
@@ -85,12 +148,21 @@ export async function runWarmupOrchestrator(opts: {
   dryRun?: boolean;
   limit?: number;
   autoStart?: boolean;
+  accountIds?: string[];
+  requireDue?: boolean;
+  requireInWindow?: boolean;
 }): Promise<WarmupOrchestratorResult> {
   const dryRun = opts.dryRun === true;
   const limit = opts.limit ?? 20;
   const autoStart = opts.autoStart !== false;
 
-  const plans = (await planWarmupDialogPairs()).slice(0, limit);
+  const plans = (
+    await planWarmupDialogPairs(new Date(), {
+      accountIds: opts.accountIds,
+      requireDue: opts.requireDue,
+      requireInWindow: opts.requireInWindow,
+    })
+  ).slice(0, limit);
   const result: WarmupOrchestratorResult = {
     scanned: plans.length,
     paired: plans.length,
