@@ -20,6 +20,7 @@ export async function sendText(
   proxy: ProxyDoc | null,
   to: string,
   text: string,
+  opts: { importContactFirstName?: string } = {},
 ): Promise<{ randomId: string }> {
   if (!isWithinTelegramMessageLength(text)) {
     throw new TgDomainError({
@@ -55,6 +56,9 @@ export async function sendText(
         session,
         peer: to.trim(),
         text,
+        ...(opts.importContactFirstName?.trim()
+          ? { importContactFirstName: opts.importContactFirstName.trim().slice(0, 64) }
+          : {}),
         ...telethonCommon(creds, device, proxyPayload),
       }),
     );

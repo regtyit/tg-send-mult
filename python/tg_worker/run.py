@@ -33,9 +33,10 @@ from telethon.network.connection.tcpmtproxy import (
     ConnectionTcpMTProxyRandomizedIntermediate,
 )
 from telethon.sessions import StringSession
+from telethon.tl.functions.contacts import ImportContactsRequest
 from telethon.tl.functions.messages import SetTypingRequest
 from telethon.tl.functions.updates import GetStateRequest
-from telethon.tl.types import SendMessageTypingAction, User
+from telethon.tl.types import InputPhoneContact, SendMessageTypingAction, User
 
 
 def _normalize_mtproxy_secret(raw: str) -> str:
@@ -402,6 +403,58 @@ def _phone_digits(raw: str) -> str:
     return re.sub(r"\D", "", str(raw or ""))
 
 
+def _looks_like_e164_phone(peer: str) -> bool:
+    s = str(peer or "").strip()
+    if not s.startswith("+"):
+        return False
+    return len(_phone_digits(s)) >= 8
+
+
+def _entity_not_found_error(exc: BaseException) -> bool:
+    msg = str(exc).lower()
+    return "cannot find any entity" in msg or "invalid peer" in msg or "could not find" in msg
+
+
+async def _resolve_peer(client: TelegramClient, peer: str, req: dict[str, Any]) -> Any:
+    """
+    Resolve a peer for outbound actions. Phone peers are auto-imported to contacts
+    when not yet in the local entity cache (required for warm-up dialogs between senders).
+    """
+    peer = str(peer or "").strip()
+    if not peer:
+        raise ValueError("Empty peer")
+    try:
+        return await client.get_entity(peer)
+    except ValueError as exc:
+        if not _entity_not_found_error(exc) or not _looks_like_e164_phone(peer):
+            raise
+        first_name = str(req.get("importContactFirstName") or "Contact").strip()[:64] or "Contact"
+        phone = "+" + _phone_digits(peer)
+        import random
+
+        result = await client(
+            ImportContactsRequest(
+                [
+                    InputPhoneContact(
+                        client_id=random.randint(1, 2_000_000_000),
+                        phone=phone,
+                        first_name=first_name,
+                        last_name="",
+                    )
+                ]
+            )
+        )
+        if result.users:
+            return result.users[0]
+        try:
+            return await client.get_entity(phone)
+        except ValueError:
+            raise ValueError(
+                f"Cannot find any entity corresponding to {phone!r} "
+                "(not on Telegram or hidden from contact import)"
+            ) from exc
+
+
 def _peer_matches_filter(entity: Any, req: dict[str, Any]) -> bool:
     """When peer* filters are set, only scan that dialog."""
     want_uid = str(req.get("peerUserId") or "").strip()
@@ -432,7 +485,7 @@ async def handle_set_typing(req: dict[str, Any]) -> dict[str, Any]:
         client = await _connect_client(req, session)
         if not await client.is_user_authorized():
             return _fail("AUTH_KEY_UNREGISTERED", "Session not authorized")
-        entity = await client.get_entity(peer)
+        entity = await _resolve_peer(client, peer, req)
         await client(SetTypingRequest(entity, SendMessageTypingAction()))
         await asyncio.sleep(seconds)
         return _ok({})
@@ -453,7 +506,8 @@ async def handle_send_message(req: dict[str, Any]) -> dict[str, Any]:
         client = await _connect_client(req, session)
         if not await client.is_user_authorized():
             return _fail("AUTH_KEY_UNREGISTERED", "Session not authorized")
-        msg = await client.send_message(peer, text)
+        entity = await _resolve_peer(client, peer, req)
+        msg = await client.send_message(entity, text)
         rid = getattr(msg, "random_id", None)
         return _ok({"randomId": str(rid) if rid is not None else ""})
     except Exception as exc:

@@ -21,6 +21,8 @@ import { planTurnForSession, totalTurnsForScript } from './planTurn';
 import {
   peerFilterFromAccount,
   peerFilterFromContact,
+  peerImportFirstName,
+  peerImportFirstNameFromContact,
   peerStringFromAccount,
   peerStringFromContact,
 } from './resolvePeer';
@@ -354,6 +356,12 @@ export async function executeDialogTurn(
   const proxy = sender.proxyId ? await ProxyModel.findById(sender.proxyId) : null;
   let readAt: Date | null = null;
   let turnError = '';
+  const importContactFirstName =
+    planned.senderAccountId.equals(accountA._id)
+      ? session.peerType === 'contact' && peerContact
+        ? peerImportFirstNameFromContact(peerContact)
+        : peerImportFirstName(peerAccount)
+      : peerImportFirstName(accountA);
 
   try {
     if (planned.side === 'sync') {
@@ -377,10 +385,12 @@ export async function executeDialogTurn(
       readAt = peerSyncMarkedRead(sync);
     } else {
       if (planned.typingSec > 0 && planned.text) {
-        await setTypingForPeer(sender, proxy, planned.peer, planned.typingSec);
+        await setTypingForPeer(sender, proxy, planned.peer, planned.typingSec, {
+          importContactFirstName,
+        });
       }
       if (planned.text) {
-        await sendText(sender, proxy, planned.peer, planned.text);
+        await sendText(sender, proxy, planned.peer, planned.text, { importContactFirstName });
       }
     }
   } catch (err) {

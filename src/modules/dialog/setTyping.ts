@@ -12,6 +12,7 @@ export async function setTypingForPeer(
   proxy: ProxyDoc | null,
   peer: string,
   seconds: number,
+  opts: { importContactFirstName?: string } = {},
 ): Promise<void> {
   assertMtProxyPolicy(account, proxy);
   const creds = telegramApiCredentialsForAccount(account);
@@ -22,6 +23,9 @@ export async function setTypingForPeer(
       session: decryptSessionStringForAccount(account),
       peer: peer.trim(),
       seconds: Math.min(30, Math.max(1, Math.floor(seconds))),
+      ...(opts.importContactFirstName?.trim()
+        ? { importContactFirstName: opts.importContactFirstName.trim().slice(0, 64) }
+        : {}),
       ...telethonCommon(creds, deviceProfileFromAccount(account), proxyPayload),
     }),
   );
