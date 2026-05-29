@@ -341,7 +341,10 @@ def _rpc_to_err(exc: Exception, req: dict[str, Any] | None = None) -> dict[str, 
     if isinstance(exc, PasswordHashInvalidError):
         return _fail("PASSWORD_HASH_INVALID", str(exc))
     if isinstance(exc, RPCError):
-        return _fail(exc.error_message or "RPC_ERROR", str(exc))
+        # Telethon v1 RPCError uses `.message` (not `.error_message`).
+        raw_code = getattr(exc, "message", None) or getattr(exc, "error_message", None)
+        code = (raw_code.strip().upper() if isinstance(raw_code, str) and raw_code.strip() else exc.__class__.__name__.upper())
+        return _fail(code, str(exc))
     if isinstance(exc, asyncio.TimeoutError):
         msg = "Connection timed out" + _proxy_network_hint(req)
         return _fail("NETWORK", msg)

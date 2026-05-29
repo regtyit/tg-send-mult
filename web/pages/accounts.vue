@@ -150,6 +150,30 @@
       <template #[`item.status`]="{ item }">
         <span class="cell-overflow">{{ item.status }}</span>
       </template>
+      <template #[`item.warmup`]="{ item }">
+        <span v-if="item.status === 'warming'" class="text-caption cell-overflow">
+          {{ item.readinessDialogsCompleted ?? 0 }}/{{ item.readinessDialogsRecommended ?? 3 }}
+          <v-chip
+            v-if="item.warming?.readinessMet"
+            size="x-small"
+            color="success"
+            variant="tonal"
+            class="mt-1"
+          >
+            ready
+          </v-chip>
+          <v-chip
+            v-else-if="item.warming?.warmupDialogDue"
+            size="x-small"
+            color="primary"
+            variant="tonal"
+            class="mt-1"
+          >
+            due
+          </v-chip>
+        </span>
+        <span v-else class="text-medium-emphasis">—</span>
+      </template>
       <template #[`item.healthScore`]="{ item }">
         <span class="cell-overflow">{{ item.healthScore?.toFixed?.(2) ?? '—' }}</span>
       </template>
@@ -363,6 +387,16 @@ interface Account {
   };
   dailyLimits?: { msgsToNew?: number; ratePerHour?: number };
   dailyCounters?: { msgsToNew?: number };
+  readinessDialogsCompleted?: number;
+  readinessDialogsRecommended?: number;
+  readinessMet?: boolean;
+  warming?: {
+    readinessDialogsCompleted: number;
+    readinessDialogsRecommended: number;
+    readinessMet: boolean;
+    warmupDialogDue: boolean;
+    nextRecommendedDialogAt: string | null;
+  };
 }
 interface ProxyRow {
   _id: string;
@@ -420,6 +454,7 @@ const headers = [
   fixedCol('@user', 'telegramUsername', 100),
   fixedCol('Proxy', 'proxy', 88, { sortable: false }),
   fixedCol('Status', 'status', 88),
+  fixedCol('Warm-up', 'warmup', 100, { sortable: false }),
   fixedCol('Health', 'healthScore', 64),
   fixedCol('Today', 'daily', 96, { sortable: false }),
   fixedCol('Device', 'deviceProfile', 100, { sortable: false }),

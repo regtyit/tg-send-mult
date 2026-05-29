@@ -290,6 +290,10 @@ async function main() {
             ...body.deviceProfile,
           });
         }
+        if (body.warmupSchedule) {
+          const { normalizeWarmupSchedule } = await import('../../modules/accounts/warmupSchedule');
+          patch.warmupSchedule = normalizeWarmupSchedule(body.warmupSchedule);
+        }
         const updated = await AccountModel.findByIdAndUpdate(params.id, { $set: patch }, { new: true });
         if (!updated) return reply.code(404).send({ error: 'not found' });
         if (updated.role === 'test_recipient') {

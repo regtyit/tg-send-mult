@@ -75,6 +75,15 @@ export const accountCreateBody = z
   })
   .strict();
 
+export const warmupScheduleSchema = z
+  .object({
+    mode: z.enum(['interval', 'weekdays']),
+    intervalDays: z.number().int().min(1).max(30).optional(),
+    weekdays: z.array(z.number().int().min(1).max(7)).optional(),
+    maxRecommendedDialogs: z.number().int().min(1).max(30).optional(),
+  })
+  .strict();
+
 export const accountPatchBody = z
   .object({
     status: z.enum(['new', 'warming', 'active', 'paused', 'quarantined', 'banned']).optional(),
@@ -87,6 +96,7 @@ export const accountPatchBody = z
     /** Re-apply bundled regional window from ISO2 (overrides sendingWindow when set). */
     applyRegionalWindow: z.boolean().optional(),
     sendingWindow: sendingWindowSchema.optional(),
+    warmupSchedule: warmupScheduleSchema.optional(),
   })
   .strict();
 

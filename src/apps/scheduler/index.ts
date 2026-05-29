@@ -16,6 +16,7 @@ import { TgDomainError } from '../../telegram/errors';
 import { installShutdownHandlers, onShutdown } from '../../util/shutdown';
 import { promoteWarmedAccounts } from '../../modules/accounts/warming';
 import { runDialogSessionsBatch } from '../../modules/dialog/batchTick';
+import { runWarmupOrchestrator } from '../../modules/dialog/warmupOrchestrator';
 import { inboundRepliesTick } from './inboundSyncTick';
 
 function ymdInTz(d: Date, tz: string): string {
@@ -173,6 +174,16 @@ async function dialogSessionsTick(): Promise<void> {
   }
 }
 
+async function warmupDialogsTick(): Promise<void> {
+  const r = await runWarmupOrchestrator({ limit: 10, autoStart: true });
+  if (r.created > 0 || r.started > 0) {
+    logger.info(
+      { created: r.created, started: r.started, skipped: r.skipped },
+      'scheduler: warm-up dialog orchestrator',
+    );
+  }
+}
+
 async function main(): Promise<void> {
   installShutdownHandlers();
   await connectMongo();
@@ -195,6 +206,9 @@ async function main(): Promise<void> {
     }),
     cron.schedule('* * * * *', () => {
       dialogSessionsTick().catch((err) => logger.error({ err }, 'scheduler: dialog sessions failed'));
+    }),
+    cron.schedule('15 * * * *', () => {
+      warmupDialogsTick().catch((err) => logger.error({ err }, 'scheduler: warm-up dialogs failed'));
     }),
   ];
 

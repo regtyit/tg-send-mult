@@ -2,10 +2,13 @@ import { describe, expect, it } from 'vitest';
 import {
   calendarDayKey,
   computeWarmingFinishesAt,
-  isWarmingScriptQuotaMet,
+  isWarmingReadinessMet,
+  readinessDialogsRecommended,
   warmingCanStartScriptToday,
   warmingMsgsPerDayCap,
+  warmingStartHints,
 } from '../../src/modules/accounts/warming';
+import { isWarmupDialogDue, nextWarmupDialogAt } from '../../src/modules/accounts/warmupSchedule';
 
 describe('warming policy', () => {
   it('caps campaign msgs per day during warming', () => {
@@ -20,31 +23,43 @@ describe('warming policy', () => {
     expect(finish.getMonth()).toBe(0);
   });
 
-  it('allows one warm-up script per calendar day', () => {
+  it('allows warm-up scripts with soft hints only', () => {
     const at = new Date('2026-05-24T10:00:00Z');
     const day = calendarDayKey(at, 'UTC');
     const warming = {
       status: 'warming' as const,
-      warmingLastScriptDay: '',
+      warmingLastScriptDay: day,
       warmingScriptDaysCompleted: 0,
-      sendingWindow: { timezone: 'UTC' },
+      warmingStartedAt: new Date('2026-05-20T10:00:00Z'),
+      sendingWindow: { timezone: 'UTC', start: '09:00', end: '22:00' },
+      warmupSchedule: { mode: 'interval' as const, intervalDays: 2, weekdays: [1, 3, 5], maxRecommendedDialogs: 3 },
     };
     expect(warmingCanStartScriptToday(warming, at).allowed).toBe(true);
-
-    warming.warmingLastScriptDay = day;
-    expect(warmingCanStartScriptToday(warming, at).allowed).toBe(false);
-    expect(warmingCanStartScriptToday(warming, at).code).toBe('warming_daily_script_limit');
+    const hints = warmingStartHints(warming, at);
+    expect(hints.some((h) => h.code === 'warming_daily_script_hint')).toBe(true);
   });
 
-  it('blocks new scripts after quota days completed', () => {
+  it('readiness met after recommended count', () => {
     const warming = {
       status: 'warming' as const,
-      warmingLastScriptDay: '',
-      warmingScriptDaysCompleted: 3,
+      warmingScriptDaysCompleted: readinessDialogsRecommended(),
       sendingWindow: { timezone: 'UTC' },
     };
-    expect(isWarmingScriptQuotaMet(warming)).toBe(true);
-    expect(warmingCanStartScriptToday(warming).allowed).toBe(false);
-    expect(warmingCanStartScriptToday(warming).code).toBe('warming_scripts_complete');
+    expect(isWarmingReadinessMet(warming)).toBe(true);
+    expect(warmingCanStartScriptToday(warming).allowed).toBe(true);
+  });
+
+  it('computes next warm-up slot in interval mode', () => {
+    const started = new Date('2026-05-01T10:00:00Z');
+    const account = {
+      warmingStartedAt: started,
+      warmingScriptDaysCompleted: 1,
+      sendingWindow: { timezone: 'UTC', start: '09:00', end: '22:00' },
+      warmupSchedule: { mode: 'interval' as const, intervalDays: 2, weekdays: [1, 3, 5], maxRecommendedDialogs: 3 },
+    };
+    const at = new Date('2026-05-03T10:00:00Z');
+    const next = nextWarmupDialogAt(account, at);
+    expect(next).not.toBeNull();
+    expect(isWarmupDialogDue({ status: 'warming', ...account }, at)).toBe(true);
   });
 });

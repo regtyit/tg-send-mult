@@ -15,6 +15,8 @@ export type HumanDialogPresetCategory = 'social' | 'work' | 'support' | 'logisti
 export interface HumanDialogPreset {
   /** Stable id for API/CLI (kebab-case). */
   slug: string;
+  /** Suggested ordinal for warm-up readiness (1st, 2nd, 3rd recommended dialog). */
+  warmupSlot?: 1 | 2 | 3;
   /** Shown in UI and stored as script name. */
   name: string;
   /** Short blurb for the picker. */
@@ -517,7 +519,15 @@ export function humanDialogPresetDetail(p: HumanDialogPreset): {
   };
 }
 
-export function humanDialogPresetSummary(p: HumanDialogPreset): {
+export function warmupSlotForPreset(p: HumanDialogPreset, indexInList: number): 1 | 2 | 3 {
+  if (p.warmupSlot) return p.warmupSlot;
+  return (((indexInList % 3) + 1) as 1 | 2 | 3);
+}
+
+export function humanDialogPresetSummary(
+  p: HumanDialogPreset,
+  indexInList = 0,
+): {
   slug: string;
   name: string;
   description: string;
@@ -525,6 +535,7 @@ export function humanDialogPresetSummary(p: HumanDialogPreset): {
   category: HumanDialogPresetCategory;
   turnCount: number;
   preview: string;
+  warmupSlot: 1 | 2 | 3;
 } {
   const first = p.turns[0]?.text ?? '';
   const preview = first.length > 90 ? `${first.slice(0, 90)}…` : first;
@@ -536,6 +547,7 @@ export function humanDialogPresetSummary(p: HumanDialogPreset): {
     category: p.category,
     turnCount: p.turns.length,
     preview,
+    warmupSlot: warmupSlotForPreset(p, indexInList),
   };
 }
 

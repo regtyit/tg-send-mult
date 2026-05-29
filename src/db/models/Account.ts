@@ -63,6 +63,16 @@ const healthMetricsSchema = new Schema(
   { _id: false },
 );
 
+const warmupScheduleSchema = new Schema(
+  {
+    mode: { type: String, enum: ['interval', 'weekdays'], default: 'interval' },
+    intervalDays: { type: Number, default: 2, min: 1 },
+    weekdays: { type: [Number], default: [1, 3, 5] },
+    maxRecommendedDialogs: { type: Number, default: 3, min: 1 },
+  },
+  { _id: false },
+);
+
 const accountSchema = new Schema(
   {
     phone: { type: String, required: true, trim: true },
@@ -113,10 +123,14 @@ const accountSchema = new Schema(
 
     warmingStartedAt: { type: Date, default: null },
     warmingFinishesAt: { type: Date, default: null },
-    /** Calendar days (in account TZ) with at least one completed warm-up dialog script. */
+    /** Completed warm-up dialog sessions (readiness guidance; not required for promotion). */
     warmingScriptDaysCompleted: { type: Number, default: 0, min: 0 },
-    /** Last calendar day (YYYY-MM-DD) a warm-up script was counted. */
+    /** Last calendar day (YYYY-MM-DD) a warm-up dialog completed (for daily hints). */
     warmingLastScriptDay: { type: String, default: '' },
+    /** Operator warm-up dialog schedule (cadence / weekdays). */
+    warmupSchedule: { type: warmupScheduleSchema, default: () => ({}) },
+    /** Preset slugs already used in completed warm-up dialogs. */
+    warmingUsedPresetSlugs: { type: [String], default: [] },
 
     lastUsedAt: { type: Date, default: null },
     lastInboundSyncAt: { type: Date, default: null },

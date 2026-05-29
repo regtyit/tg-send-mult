@@ -148,7 +148,7 @@ flowchart LR
 
 ### Account statuses
 
-`new` → `warming` → `active` (normal path). **Warm-up:** 3 calendar days, **1 dialog script per day** (then auto-promote to `active`); campaign sends capped at **1 new contact/day** while `warming`. Also: `paused`, `quarantined`, `banned`. Only `active` and `warming` senders with a saved session, healthy score (≥ 0.5), and no active flood-wait/quarantine are eligible for campaigns.
+`new` → `warming` → `active` (normal path). **Warm-up:** configurable dialog schedule (default every 2 days); **3 completed dialogs recommended** for readiness; time-based auto-promote to `active`; campaign sends capped at **1 new contact/day** while `warming`. Also: `paused`, `quarantined`, `banned`. Only `active` and `warming` senders with a saved session, healthy score (≥ 0.5), and no active flood-wait/quarantine are eligible for campaigns.
 
 ### Sticky sender + even distribution
 

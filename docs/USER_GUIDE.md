@@ -316,7 +316,7 @@ new  ──► warming  ──► active
               │           └── banned (auth invalid / phone banned)
 ```
 
-- **warming** — new sessions; run **one dialog script per calendar day** for **3 days** (account timezone), plus at most **1 campaign message/day** to new contacts. Scheduler runs lightweight `get_state` checks; promotes to **active** when `WARMUP_DAYS` have passed **and** three warm-up script days are recorded (`WARMUP_DAYS`, `WARMUP_MSGS_PER_DAY`, `WARMUP_SCRIPTS_PER_DAY` in `.env`).
+- **warming** — new sessions; run warm-up **dialogs on your configured schedule** (default: every 2 days from import). **Three completed dialogs** are **recommended** for readiness (shown in UI), not required for promotion. At most **1 campaign message/day** to new contacts while warming. Scheduler promotes to **active** when `WARMUP_DAYS` have passed (time-based). Env: `WARMUP_DAYS`, `WARMUP_READINESS_RECOMMENDED`, `WARMUP_MSGS_PER_DAY`.
 - **paused** — manual stop; not eligible to send.
 - **quarantined** — temporary block after severe errors.
 - **banned** — session dead or phone banned; requires re-auth or removal.

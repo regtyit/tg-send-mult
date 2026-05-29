@@ -30,10 +30,8 @@ import {
   upsertHumanDialogPreset,
 } from '../../modules/dialog/humanDialogTemplates';
 import { resolveAccountSpecifiers } from '../../modules/accounts/resolveAccountSpecifiers';
-import {
-  WarmingPolicyError,
-  assertWarmingCanStartScriptForSession,
-} from '../../modules/accounts/warming';
+import { getWarmingStartHintsForSession } from '../../modules/accounts/warming';
+import { planWarmupDialogPairs, runWarmupOrchestrator, warmingFleetSummary } from '../../modules/dialog/warmupOrchestrator';
 import { logger } from '../../logger';
 
 async function mapPool<T>(
@@ -114,7 +112,7 @@ export function registerDialogCommands(program: Command): void {
         lang: opts.lang ? String(opts.lang) : undefined,
         category: opts.category ? String(opts.category) : undefined,
       });
-      console.table(list.map(humanDialogPresetSummary));
+      console.table(list.map((p, i) => humanDialogPresetSummary(p, i)));
     });
 
   presets
@@ -314,11 +312,9 @@ export function registerDialogCommands(program: Command): void {
       const script = await DialogScriptModel.findById(session.scriptId);
       if (!script || totalTurnsForScript(script) === 0) throw new Error('Script has no turns');
 
-      try {
-        await assertWarmingCanStartScriptForSession(session);
-      } catch (err) {
-        if (err instanceof WarmingPolicyError) throw new Error(err.message);
-        throw err;
+      const warmingHints = await getWarmingStartHintsForSession(session);
+      if (warmingHints.length) {
+        logger.info({ warmingHints }, 'dialog: warm-up hints (not blocking)');
       }
 
       await DialogSessionModel.updateOne(
@@ -369,13 +365,6 @@ export function registerDialogCommands(program: Command): void {
           if (!session) return;
           const script = await DialogScriptModel.findById(session.scriptId);
           if (!script || totalTurnsForScript(script) === 0) return;
-
-          try {
-            await assertWarmingCanStartScriptForSession(session);
-          } catch {
-            failed += 1;
-            return;
-          }
 
           await DialogSessionModel.updateOne(
             { _id: session._id },
@@ -428,12 +417,8 @@ export function registerDialogCommands(program: Command): void {
       const session = await DialogSessionModel.findById(id);
       if (!session) throw new Error('Session not found');
       if (session.status === 'draft') {
-        try {
-          await assertWarmingCanStartScriptForSession(session);
-        } catch (err) {
-          if (err instanceof WarmingPolicyError) throw new Error(err.message);
-          throw err;
-        }
+        const hints = await getWarmingStartHintsForSession(session);
+        if (hints.length) console.warn('Warm-up hints:', JSON.stringify(hints));
         await DialogSessionModel.updateOne({ _id: session._id }, { $set: { status: 'running' } });
       } else if (session.status === 'paused' || session.status === 'waiting_peer') {
         await DialogSessionModel.updateOne({ _id: session._id }, { $set: { status: 'running' } });
@@ -462,6 +447,42 @@ export function registerDialogCommands(program: Command): void {
       });
       console.table(rows);
       console.log(`Auto active (running + waiting_peer): ${autoRunning}`);
+    });
+
+  const warmup = dialog.command('warmup').description('Warm-up dialog scheduling and fleet runs');
+
+  warmup
+    .command('summary')
+    .description('Fleet warm-up readiness overview')
+    .action(async () => {
+      await connectMongo();
+      console.log(JSON.stringify(await warmingFleetSummary(), null, 2));
+    });
+
+  warmup
+    .command('plan')
+    .description('List sender pairs due for a warm-up dialog per schedule')
+    .action(async () => {
+      await connectMongo();
+      const plans = await planWarmupDialogPairs();
+      console.table(plans);
+      console.log(`${plans.length} pair(s) due`);
+    });
+
+  warmup
+    .command('run')
+    .description('Create and start warm-up dialog sessions for due pairs')
+    .option('--dry-run', 'Only show plan')
+    .option('--limit <n>', 'Max pairs', (v) => parseInt(String(v), 10), 20)
+    .option('--no-start', 'Create drafts only')
+    .action(async (opts) => {
+      await connectMongo();
+      const r = await runWarmupOrchestrator({
+        dryRun: Boolean(opts.dryRun),
+        limit: Number.isFinite(opts.limit) ? opts.limit : 20,
+        autoStart: !opts.noStart,
+      });
+      console.log(JSON.stringify(r, null, 2));
     });
 }
 

@@ -1,5 +1,6 @@
 import { logger } from '../../logger';
 import { describeSendingWindowAccount } from '../../modules/antilimit/window';
+import { describeWarmingStatus } from '../../modules/accounts/warming';
 import { describeSenderEligibility, formatEligibilityReasons } from '../../modules/multi/senderEligibility';
 import type { AccountDoc } from '../../db/models/Account';
 
@@ -69,6 +70,31 @@ export function sanitizeAccount(doc: unknown): Record<string, unknown> | null {
     logger.warn({ err, accountId: obj._id }, 'api: sender eligibility check failed');
     out.sendable = false;
     out.sendBlockReason = 'Could not evaluate send eligibility';
+  }
+  try {
+    const warming = describeWarmingStatus({
+      status: typeof obj.status === 'string' ? obj.status : 'new',
+      warmingStartedAt:
+        obj.warmingStartedAt instanceof Date ? obj.warmingStartedAt : null,
+      warmingFinishesAt:
+        obj.warmingFinishesAt instanceof Date ? obj.warmingFinishesAt : null,
+      warmingScriptDaysCompleted:
+        typeof obj.warmingScriptDaysCompleted === 'number'
+          ? obj.warmingScriptDaysCompleted
+          : 0,
+      warmingLastScriptDay:
+        typeof obj.warmingLastScriptDay === 'string' ? obj.warmingLastScriptDay : '',
+      warmupSchedule: obj.warmupSchedule as AccountDoc['warmupSchedule'],
+      sendingWindow: obj.sendingWindow as AccountDoc['sendingWindow'],
+    } as AccountDoc);
+    if (warming) {
+      out.warming = warming;
+      out.readinessDialogsCompleted = warming.readinessDialogsCompleted;
+      out.readinessDialogsRecommended = warming.readinessDialogsRecommended;
+      out.readinessMet = warming.readinessMet;
+    }
+  } catch (err) {
+    logger.warn({ err, accountId: obj._id }, 'api: warming status check failed');
   }
   for (const key of ACCOUNT_SENSITIVE_FIELDS) {
     delete out[key];

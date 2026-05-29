@@ -57,6 +57,7 @@ export async function importAccountWithRollback(
             warmingFinishesAt: null,
             warmingScriptDaysCompleted: 0,
             warmingLastScriptDay: '',
+            warmingUsedPresetSlugs: [],
           },
         });
         throw err;

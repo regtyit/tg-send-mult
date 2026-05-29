@@ -149,6 +149,27 @@ export interface SendingWindowStatus {
   resumesAtLocal?: string;
 }
 
+/** Earliest time at or after `earliest` when the account sending window is open. */
+export function nextTimeWithinSendingWindow(
+  account: Pick<AccountDoc, 'sendingWindow'>,
+  earliest: Date = new Date(),
+): Date {
+  if (isWithinSendingWindowAccount(account as AccountDoc, earliest)) return earliest;
+  const tz = account.sendingWindow?.timezone?.trim() || 'UTC';
+  const start = safeParseWithFallback(
+    account.sendingWindow?.start,
+    { h: 0, m: 0 },
+    'account.sendingWindow.start',
+  );
+  const end = safeParseWithFallback(
+    account.sendingWindow?.end,
+    { h: 23, m: 59 },
+    'account.sendingWindow.end',
+  );
+  const waitMin = minutesUntilWindowOpens(earliest, tz, start, end);
+  return new Date(earliest.getTime() + waitMin * 60_000);
+}
+
 export function describeSendingWindowAccount(
   account: Pick<AccountDoc, 'sendingWindow'>,
   now = new Date(),

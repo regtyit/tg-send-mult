@@ -12,6 +12,7 @@ import type { ContactDoc } from '../../db/models/Contact';
 import type { DialogScriptDoc } from '../../db/models/DialogScript';
 import type { DialogSessionDoc } from '../../db/models/DialogSession';
 import { recordWarmingScriptDayForSession } from '../accounts/warming';
+import { isWithinSendingWindowAccount, nextTimeWithinSendingWindow } from '../antilimit/window';
 import { sendText } from '../messaging/send';
 import { nextPeerCheckAt, peerCheckDelaySec, sessionDueForPeerCheck } from '../sync/timing';
 import { pickDelayMs } from './delay';
@@ -201,7 +202,12 @@ async function scheduleSessionAfterTurn(
     nextRunAt = nextPeerCheckAt(0);
   } else if (session.runMode === 'auto' && nextPlanned) {
     const delayMs = pickDelayMs(nextPlanned.delaySecMin, nextPlanned.delaySecMax);
-    nextRunAt = new Date(Date.now() + delayMs);
+    let candidate = new Date(Date.now() + delayMs);
+    const nextSender = await AccountModel.findById(nextPlanned.senderAccountId);
+    if (nextSender) {
+      candidate = nextTimeWithinSendingWindow(nextSender, candidate);
+    }
+    nextRunAt = candidate;
   }
 
   await DialogSessionModel.updateOne(
@@ -328,6 +334,21 @@ export async function executeDialogTurn(
       { $set: { status: 'failed', lastError: 'Sender missing session' } },
     );
     return { done: true, turnIndex: planned.turnIndex, error: 'No sender session' };
+  }
+
+  if (session.runMode === 'auto' && !isWithinSendingWindowAccount(sender)) {
+    const nextRunAt = nextTimeWithinSendingWindow(sender, new Date());
+    await DialogSessionModel.updateOne(
+      { _id: session._id },
+      {
+        $set: {
+          status: 'running',
+          nextRunAt,
+          lastError: 'Deferred: outside sending window',
+        },
+      },
+    );
+    return { done: false, turnIndex: planned.turnIndex, waiting: false };
   }
 
   const proxy = sender.proxyId ? await ProxyModel.findById(sender.proxyId) : null;

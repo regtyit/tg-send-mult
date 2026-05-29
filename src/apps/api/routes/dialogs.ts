@@ -8,10 +8,14 @@ import {
   DialogTurnModel,
   InboundReplyModel,
 } from '../../../db/models';
+import { config } from '../../../config';
 import {
-  WarmingPolicyError,
-  assertWarmingCanStartScriptForSession,
+  describeWarmingStatus,
+  readinessDialogsRecommended,
+  warmingStartHints,
 } from '../../../modules/accounts/warming';
+import { suggestWarmupPreset } from '../../../modules/dialog/suggestWarmupPreset';
+import { runWarmupOrchestrator } from '../../../modules/dialog/warmupOrchestrator';
 import { continueDialogSession } from '../../../modules/dialog/continueSession';
 import { executeDialogTurn } from '../../../modules/dialog/executeTurn';
 import {
@@ -47,7 +51,56 @@ export async function registerDialogRoutes(r: FastifyInstance): Promise<void> {
     const q = dialogPresetsQuery.safeParse(req.query ?? {});
     const filters = q.success ? q.data : {};
     const list = filterHumanDialogPresets(filters);
-    return { presets: list.map(humanDialogPresetSummary) };
+    return { presets: list.map((p, i) => humanDialogPresetSummary(p, i)) };
+  });
+
+  r.get('/dialog-config/warming', async () => ({
+    warmupDays: config.WARMUP_DAYS,
+    readinessDialogsRecommended: readinessDialogsRecommended(),
+    warmupMsgsPerDay: config.WARMUP_MSGS_PER_DAY,
+    warmupScriptsPerDay: config.WARMUP_SCRIPTS_PER_DAY,
+  }));
+
+  r.get('/dialog-sessions/warming-preview', async (req, reply) => {
+    const accountAId = String((req.query as { accountAId?: string })?.accountAId ?? '').trim();
+    const peerAccountId = String((req.query as { peerAccountId?: string })?.peerAccountId ?? '').trim();
+    if (!accountAId) {
+      return reply.code(400).send({ error: 'account_a_required' });
+    }
+    const accountA = await AccountModel.findById(accountAId);
+    if (!accountA) return reply.code(404).send({ error: 'account_a_not_found' });
+
+    const suggestion = suggestWarmupPreset(accountA);
+    const peer = peerAccountId ? await AccountModel.findById(peerAccountId) : null;
+
+    const hints = [...warmingStartHints(accountA)];
+    if (peer) hints.push(...warmingStartHints(peer));
+
+    const issues: string[] = [];
+    if (!accountA.sessionEnc) issues.push('Sender A has no saved session');
+    if (peerAccountId && !peer) issues.push('Peer account not found');
+    if (peer && !peer.sessionEnc) issues.push('Peer has no saved session');
+    if (peer && String(peer._id) === String(accountA._id)) issues.push('Peer must differ from sender A');
+    if (accountA.status === 'warming' && !peerAccountId) {
+      issues.push('Warm-up dialogs need another sender as peer (not contact-only)');
+    }
+
+    return {
+      accountA: {
+        id: String(accountA._id),
+        warming: describeWarmingStatus(accountA),
+        suggestion,
+      },
+      peer: peer
+        ? {
+            id: String(peer._id),
+            warming: describeWarmingStatus(peer),
+          }
+        : null,
+      hints,
+      issues,
+      ok: issues.length === 0,
+    };
   });
 
   r.get('/dialog-scripts/presets/:slug', async (req, reply) => {
@@ -129,6 +182,16 @@ export async function registerDialogRoutes(r: FastifyInstance): Promise<void> {
     return doc.toObject();
   });
 
+  r.post('/dialog-sessions/warmup-run', async (req) => {
+    const body = (req.body as { dryRun?: boolean; limit?: number }) ?? {};
+    const result = await runWarmupOrchestrator({
+      dryRun: Boolean(body.dryRun),
+      limit: typeof body.limit === 'number' ? body.limit : 10,
+      autoStart: true,
+    });
+    return result;
+  });
+
   r.get('/dialog-sessions', async () =>
     DialogSessionModel.find().sort({ updatedAt: -1 }).limit(200).lean(),
   );
@@ -166,6 +229,21 @@ export async function registerDialogRoutes(r: FastifyInstance): Promise<void> {
     const script = await DialogScriptModel.findById(scriptId);
     if (!script) return reply.code(404).send({ error: 'script_not_found' });
 
+    const issues: string[] = [];
+    if (!accountA.sessionEnc) issues.push('Sender A has no saved session');
+    if (body.peerType === 'account' && body.peerAccountId) {
+      if (String(body.peerAccountId) === String(body.accountAId)) {
+        issues.push('Peer must differ from sender A');
+      }
+      const peer = await AccountModel.findById(body.peerAccountId);
+      if (!peer?.sessionEnc) issues.push('Peer has no saved session');
+      if (accountA.status === 'warming' || peer?.status === 'warming') {
+        if (body.peerType !== 'account') {
+          issues.push('Warm-up requires two senders');
+        }
+      }
+    }
+
     const doc = await DialogSessionModel.create({
       name: body.name ?? '',
       scriptId,
@@ -176,7 +254,15 @@ export async function registerDialogRoutes(r: FastifyInstance): Promise<void> {
       runMode: body.runMode ?? 'manual',
       status: 'draft',
     });
-    return doc.toObject();
+
+    const warmingHints =
+      accountA.status === 'warming'
+        ? await import('../../../modules/accounts/warming').then((m) =>
+            m.getWarmingStartHintsForSession(doc),
+          )
+        : [];
+
+    return { ...doc.toObject(), warmingHints, validationIssues: issues };
   });
 
   r.post('/dialog-sessions/:id/start', async (req, reply) => {
@@ -191,14 +277,9 @@ export async function registerDialogRoutes(r: FastifyInstance): Promise<void> {
       return reply.code(400).send({ error: 'script_has_no_turns' });
     }
 
-    try {
-      await assertWarmingCanStartScriptForSession(session);
-    } catch (err) {
-      if (err instanceof WarmingPolicyError) {
-        return reply.code(400).send({ error: err.code, message: err.message });
-      }
-      throw err;
-    }
+    const warmingHints = await import('../../../modules/accounts/warming').then((m) =>
+      m.getWarmingStartHintsForSession(session),
+    );
 
     await DialogSessionModel.updateOne(
       { _id: session._id },
@@ -218,7 +299,7 @@ export async function registerDialogRoutes(r: FastifyInstance): Promise<void> {
       void continueDialogSession(params.id).catch(() => {});
     }
 
-    return { ok: true, sessionId: params.id };
+    return { ok: true, sessionId: params.id, warmingHints };
   });
 
   r.post('/dialog-sessions/:id/pause', async (req, reply) => {
@@ -257,15 +338,10 @@ export async function registerDialogRoutes(r: FastifyInstance): Promise<void> {
     const session = await DialogSessionModel.findById(params.id);
     if (!session) return reply.code(404).send({ error: 'not_found' });
 
+    let warmingHints: import('../../../modules/accounts/warming').WarmingStartHint[] = [];
     if (session.status === 'draft') {
-      try {
-        await assertWarmingCanStartScriptForSession(session);
-      } catch (err) {
-        if (err instanceof WarmingPolicyError) {
-          return reply.code(400).send({ error: err.code, message: err.message });
-        }
-        throw err;
-      }
+      const warming = await import('../../../modules/accounts/warming');
+      warmingHints = await warming.getWarmingStartHintsForSession(session);
       await DialogSessionModel.updateOne(
         { _id: session._id },
         { $set: { status: 'running', currentTurn: 0 } },
@@ -287,7 +363,7 @@ export async function registerDialogRoutes(r: FastifyInstance): Promise<void> {
       void continueDialogSession(params.id).catch(() => {});
     }
     const updated = await DialogSessionModel.findById(params.id).lean();
-    return { ok: true, result, session: updated };
+    return { ok: true, result, session: updated, warmingHints };
   });
 
   r.get('/dialog-sessions/:id/transcript', async (req, reply) => {

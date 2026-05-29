@@ -26,8 +26,9 @@ describe('humanDialogTemplates', () => {
   it('resolves slug and builds summary', () => {
     const p = getHumanDialogPreset('coffee-catchup');
     expect(p?.name).toContain('coffee');
-    const s = humanDialogPresetSummary(p!);
+    const s = humanDialogPresetSummary(p!, 0);
     expect(s.turnCount).toBe(p!.turns.length);
     expect(s.preview.length).toBeGreaterThan(0);
+    expect(s.warmupSlot).toBeGreaterThanOrEqual(1);
   });
 });

@@ -1,7 +1,17 @@
 import { config } from '../../config';
-import { AccountModel } from '../../db/models';
+import { AccountModel, DialogScriptModel } from '../../db/models';
 import type { AccountDoc } from '../../db/models/Account';
 import type { DialogSessionDoc } from '../../db/models/DialogSession';
+import {
+  DEFAULT_WARMUP_SCHEDULE,
+  isWarmupDialogDue,
+  nextWarmupDialogAt,
+  normalizeWarmupSchedule,
+  type WarmupScheduleDoc,
+} from './warmupSchedule';
+
+export { DEFAULT_WARMUP_SCHEDULE, normalizeWarmupSchedule, isWarmupDialogDue, nextWarmupDialogAt };
+export type { WarmupScheduleDoc };
 
 export class WarmingPolicyError extends Error {
   constructor(
@@ -11,6 +21,11 @@ export class WarmingPolicyError extends Error {
     super(message);
     this.name = 'WarmingPolicyError';
   }
+}
+
+/** Recommended completed warm-up dialogs for readiness (guidance only). */
+export function readinessDialogsRecommended(): number {
+  return config.WARMUP_READINESS_RECOMMENDED;
 }
 
 /** Calendar day `YYYY-MM-DD` in the account sending-window timezone. */
@@ -42,6 +57,12 @@ export function applyWarmingSchedule(account: AccountDoc, at: Date = new Date())
     account.warmingFinishesAt = computeWarmingFinishesAt(at);
     account.warmingScriptDaysCompleted = 0;
     account.warmingLastScriptDay = '';
+    if (!account.warmupSchedule) {
+      account.warmupSchedule = { ...DEFAULT_WARMUP_SCHEDULE };
+    }
+    if (!account.warmingUsedPresetSlugs?.length) {
+      account.warmingUsedPresetSlugs = [];
+    }
   }
 }
 
@@ -49,58 +70,165 @@ export function warmingMsgsPerDayCap(baseLimit: number): number {
   return Math.min(baseLimit, config.WARMUP_MSGS_PER_DAY);
 }
 
-export function isWarmingScriptQuotaMet(account: Pick<AccountDoc, 'status' | 'warmingScriptDaysCompleted'>): boolean {
-  return (
-    account.status === 'warming' &&
-    (account.warmingScriptDaysCompleted ?? 0) >= config.WARMUP_DAYS
-  );
+/** Readiness recommendation met (3+ completed warm-up dialogs by default). */
+export function isWarmingReadinessMet(
+  account: Pick<AccountDoc, 'status' | 'warmingScriptDaysCompleted'>,
+): boolean {
+  if (account.status !== 'warming') return true;
+  return (account.warmingScriptDaysCompleted ?? 0) >= readinessDialogsRecommended();
+}
+
+/** @deprecated Use isWarmingReadinessMet — kept for callers; no longer blocks promotion. */
+export function isWarmingScriptQuotaMet(
+  account: Pick<AccountDoc, 'status' | 'warmingScriptDaysCompleted'>,
+): boolean {
+  return isWarmingReadinessMet(account);
+}
+
+export interface WarmingStartHint {
+  code: string;
+  message: string;
+  severity: 'info' | 'warning';
+}
+
+/** Soft hints when starting a warm-up dialog (does not block). */
+export function warmingStartHints(
+  account: Pick<
+    AccountDoc,
+    | 'status'
+    | 'warmingLastScriptDay'
+    | 'warmingScriptDaysCompleted'
+    | 'warmingStartedAt'
+    | 'warmupSchedule'
+    | 'sendingWindow'
+  >,
+  at: Date = new Date(),
+): WarmingStartHint[] {
+  if (account.status !== 'warming') return [];
+
+  const hints: WarmingStartHint[] = [];
+  const recommended = readinessDialogsRecommended();
+  const completed = account.warmingScriptDaysCompleted ?? 0;
+
+  if (isWarmingReadinessMet(account)) {
+    hints.push({
+      code: 'warming_readiness_met',
+      severity: 'info',
+      message: `${completed}/${recommended} recommended warm-up dialogs completed. Account is ready for heavier use; promotion is time-based.`,
+    });
+  } else {
+    hints.push({
+      code: 'warming_readiness_progress',
+      severity: 'info',
+      message: `${completed}/${recommended} recommended warm-up dialogs completed.`,
+    });
+  }
+
+  const dayKey = calendarDayKey(at, accountTimezone(account));
+  if (account.warmingLastScriptDay === dayKey) {
+    hints.push({
+      code: 'warming_daily_script_hint',
+      severity: 'warning',
+      message: `A warm-up dialog already completed today (${dayKey}). Additional dialogs today are allowed but not required.`,
+    });
+  }
+
+  if (!isWarmupDialogDue(account, at)) {
+    const next = nextWarmupDialogAt(account, at);
+    if (next && !isWarmingReadinessMet(account)) {
+      hints.push({
+        code: 'warming_schedule_not_due',
+        severity: 'info',
+        message: `Next recommended warm-up dialog per your schedule: ${next.toISOString()}`,
+      });
+    }
+  }
+
+  return hints;
 }
 
 export function warmingCanStartScriptToday(
   account: Pick<
     AccountDoc,
-    'status' | 'warmingLastScriptDay' | 'warmingScriptDaysCompleted' | 'sendingWindow'
+    | 'status'
+    | 'warmingLastScriptDay'
+    | 'warmingScriptDaysCompleted'
+    | 'warmingStartedAt'
+    | 'warmupSchedule'
+    | 'sendingWindow'
   >,
   at: Date = new Date(),
-): { allowed: boolean; code?: string; message?: string } {
+): { allowed: boolean; code?: string; message?: string; hints?: WarmingStartHint[] } {
   if (account.status !== 'warming') return { allowed: true };
-  if (isWarmingScriptQuotaMet(account)) {
-    return {
-      allowed: false,
-      code: 'warming_scripts_complete',
-      message: `Warm-up requires ${config.WARMUP_DAYS} dialog scripts on separate days; wait for promotion to active.`,
-    };
-  }
-  const dayKey = calendarDayKey(at, accountTimezone(account));
-  if (account.warmingLastScriptDay === dayKey) {
-    return {
-      allowed: false,
-      code: 'warming_daily_script_limit',
-      message: `Warm-up allows ${config.WARMUP_SCRIPTS_PER_DAY} dialog script per calendar day (today: ${dayKey}).`,
-    };
-  }
-  return { allowed: true };
+  const hints = warmingStartHints(account, at);
+  return { allowed: true, hints };
 }
 
-export async function assertWarmingCanStartScriptForSession(session: DialogSessionDoc): Promise<void> {
-  const accountA = await AccountModel.findById(session.accountAId);
-  if (!accountA) return;
-
-  const checks = [warmingCanStartScriptToday(accountA)];
-  if (session.peerType === 'account' && session.peerAccountId) {
-    const peer = await AccountModel.findById(session.peerAccountId);
-    if (peer) checks.push(warmingCanStartScriptToday(peer));
-  }
-
-  for (const c of checks) {
-    if (!c.allowed) {
-      throw new WarmingPolicyError(c.code ?? 'warming_blocked', c.message ?? 'Warm-up policy blocked');
-    }
-  }
+export interface WarmingStatusView {
+  readinessDialogsCompleted: number;
+  readinessDialogsRecommended: number;
+  readinessMet: boolean;
+  warmingCanStartToday: boolean;
+  warmupDialogDue: boolean;
+  nextRecommendedDialogAt: string | null;
+  warmingPromotesAt: string | null;
+  warmingStartedAt: string | null;
+  hints: WarmingStartHint[];
+  warmupSchedule: WarmupScheduleDoc;
 }
 
-/** Count one completed warm-up script day for each warming participant. */
+export function describeWarmingStatus(
+  account: Pick<
+    AccountDoc,
+    | 'status'
+    | 'warmingStartedAt'
+    | 'warmingFinishesAt'
+    | 'warmingScriptDaysCompleted'
+    | 'warmingLastScriptDay'
+    | 'warmupSchedule'
+    | 'sendingWindow'
+  >,
+  at: Date = new Date(),
+): WarmingStatusView | null {
+  if (account.status !== 'warming') return null;
+
+  const hints = warmingStartHints(account, at);
+  const next = nextWarmupDialogAt(account, at);
+
+  return {
+    readinessDialogsCompleted: account.warmingScriptDaysCompleted ?? 0,
+    readinessDialogsRecommended: readinessDialogsRecommended(),
+    readinessMet: isWarmingReadinessMet(account),
+    warmingCanStartToday: true,
+    warmupDialogDue: isWarmupDialogDue(account, at),
+    nextRecommendedDialogAt: next ? next.toISOString() : null,
+    warmingPromotesAt: account.warmingFinishesAt
+      ? new Date(account.warmingFinishesAt).toISOString()
+      : null,
+    warmingStartedAt: account.warmingStartedAt
+      ? new Date(account.warmingStartedAt).toISOString()
+      : null,
+    hints,
+    warmupSchedule: normalizeWarmupSchedule(account.warmupSchedule as WarmupScheduleDoc | undefined),
+  };
+}
+
+/** No-op: warm-up start is not hard-blocked; use warmingStartHints in API/UI. */
+export async function assertWarmingCanStartScriptForSession(_session: DialogSessionDoc): Promise<void> {
+  return;
+}
+
+export function extractPresetSlugFromScriptNotes(notes: string | undefined | null): string | null {
+  if (!notes) return null;
+  const m = /__presetSlug:([a-z0-9-]+)__/i.exec(notes);
+  return m?.[1] ?? null;
+}
+
+/** Count one completed warm-up dialog toward readiness for each warming participant. */
 export async function recordWarmingScriptDayForSession(session: DialogSessionDoc): Promise<void> {
+  const script = await DialogScriptModel.findById(session.scriptId).select('notes').lean();
+  const presetSlug = extractPresetSlugFromScriptNotes(script?.notes);
+
   const ids: string[] = [String(session.accountAId)];
   if (session.peerType === 'account' && session.peerAccountId) {
     ids.push(String(session.peerAccountId));
@@ -112,19 +240,17 @@ export async function recordWarmingScriptDayForSession(session: DialogSessionDoc
     if (!acc || acc.status !== 'warming') continue;
 
     const dayKey = calendarDayKey(now, accountTimezone(acc));
-    if (acc.warmingLastScriptDay === dayKey) continue;
+    const update: Record<string, unknown> = {
+      $set: { warmingLastScriptDay: dayKey },
+      $inc: { warmingScriptDaysCompleted: 1 },
+    };
+    if (presetSlug) {
+      (update as { $addToSet?: Record<string, unknown> }).$addToSet = {
+        warmingUsedPresetSlugs: presetSlug,
+      };
+    }
 
-    await AccountModel.updateOne(
-      {
-        _id: accountId,
-        status: 'warming',
-        warmingLastScriptDay: { $ne: dayKey },
-      },
-      {
-        $set: { warmingLastScriptDay: dayKey },
-        $inc: { warmingScriptDaysCompleted: 1 },
-      },
-    );
+    await AccountModel.updateOne({ _id: accountId, status: 'warming' }, update);
   }
 }
 
@@ -134,9 +260,22 @@ export async function promoteWarmedAccounts(): Promise<number> {
     {
       status: 'warming',
       warmingFinishesAt: { $lte: now },
-      warmingScriptDaysCompleted: { $gte: config.WARMUP_DAYS },
     },
     { $set: { status: 'active' } },
   );
   return result.modifiedCount;
+}
+
+export async function getWarmingStartHintsForSession(
+  session: DialogSessionDoc,
+): Promise<WarmingStartHint[]> {
+  const accountA = await AccountModel.findById(session.accountAId);
+  if (!accountA) return [];
+
+  const hints = [...warmingStartHints(accountA)];
+  if (session.peerType === 'account' && session.peerAccountId) {
+    const peer = await AccountModel.findById(session.peerAccountId);
+    if (peer) hints.push(...warmingStartHints(peer));
+  }
+  return hints;
 }

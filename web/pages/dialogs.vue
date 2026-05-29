@@ -33,8 +33,9 @@
         <br />
         <strong>Timing:</strong> line 1 on <strong>Start</strong>; line 2, 3, … after each line’s pause
         (see template preview). With «wait for reply», polls run at 5s → 30s → 60s → 180s until the peer
-        sends that text. Warming accounts: at most <strong>one</strong> new script per calendar day for
-        {{ warmupDays }} days.
+        sends that text.         Warming: <strong>{{ readinessRecommended }}</strong> completed dialogs are
+        <em>recommended</em> for readiness (not required for promotion). Follow your
+        warm-up schedule; extra dialogs today are allowed with a warning.
       </div>
     </v-alert>
 
@@ -174,6 +175,45 @@
           >
             Choose <strong>Dialog script or template</strong> below — or use «Use in new session» on a preset above.
           </v-alert>
+          <v-alert
+            v-if="warmingPreview?.hints?.length"
+            type="info"
+            variant="tonal"
+            density="compact"
+            class="mb-3"
+          >
+            <div v-for="(h, i) in warmingPreview.hints" :key="i" class="text-caption">
+              {{ h.message }}
+            </div>
+          </v-alert>
+          <v-alert
+            v-if="warmingPreview?.accountA?.suggestion"
+            type="success"
+            variant="tonal"
+            density="compact"
+            class="mb-3"
+          >
+            Suggested preset:
+            <strong>{{ warmingPreview.accountA.suggestion.name }}</strong>
+            ({{ warmingPreview.accountA.suggestion.reason }})
+            <v-btn
+              size="x-small"
+              class="ml-2"
+              variant="outlined"
+              @click="applySuggestedPreset(warmingPreview.accountA.suggestion.slug)"
+            >
+              Use preset
+            </v-btn>
+          </v-alert>
+          <v-alert
+            v-if="warmingPreview?.issues?.length"
+            type="warning"
+            variant="tonal"
+            density="compact"
+            class="mb-3"
+          >
+            <div v-for="(issue, i) in warmingPreview.issues" :key="i">{{ issue }}</div>
+          </v-alert>
           <v-row dense>
             <v-col cols="12">
               <v-text-field v-model="sessionName" label="Session name" variant="outlined" density="comfortable" />
@@ -238,8 +278,16 @@
             <v-col cols="12" md="6">
               <v-select v-model="runMode" :items="runModeItems" label="Run mode" variant="outlined" density="comfortable" />
             </v-col>
-            <v-col cols="12">
+            <v-col cols="12" class="d-flex flex-wrap gap-2">
               <v-btn color="primary" :loading="creatingSession" @click="createSession">Create session</v-btn>
+              <v-btn
+                variant="tonal"
+                :loading="runningWarmupOrchestrator"
+                :disabled="!accountAId"
+                @click="runScheduledWarmup"
+              >
+                Run scheduled warm-up (fleet)
+              </v-btn>
             </v-col>
           </v-row>
         </v-card>
@@ -302,6 +350,24 @@ import { accountPickerLabel } from '~/utils/accountLabel';
 import { buildDialogTurnSchedule, formatNextRunAt } from '~/utils/dialogSchedule';
 import { DATA_TABLE_CLASS } from '~/utils/tableColumns';
 
+interface WarmingStatusView {
+  readinessDialogsCompleted: number;
+  readinessDialogsRecommended: number;
+  readinessMet: boolean;
+  warmupDialogDue: boolean;
+  nextRecommendedDialogAt: string | null;
+  hints: Array<{ code: string; message: string; severity: string }>;
+}
+
+interface WarmingPreview {
+  accountA?: {
+    suggestion?: { slug: string; name: string; reason: string };
+    warming?: WarmingStatusView | null;
+  };
+  hints?: Array<{ code: string; message: string }>;
+  issues?: string[];
+}
+
 interface DialogPresetSummary {
   slug: string;
   name: string;
@@ -310,6 +376,7 @@ interface DialogPresetSummary {
   category: string;
   turnCount: number;
   preview: string;
+  warmupSlot?: number;
 }
 
 interface DialogPresetDetail extends DialogPresetSummary {
@@ -372,7 +439,18 @@ const applyingAllPresets = ref(false);
 const sessions = ref<DialogSession[]>([]);
 const templates = ref<Array<{ _id: string; name: string }>>([]);
 const accounts = ref<
-  Array<{ _id: string; label: string; phone: string; role: string; telegramUsername?: string; status?: string }>
+  Array<{
+    _id: string;
+    label: string;
+    phone: string;
+    role: string;
+    telegramUsername?: string;
+    status?: string;
+    readinessDialogsCompleted?: number;
+    readinessDialogsRecommended?: number;
+    readinessMet?: boolean;
+    warming?: WarmingStatusView | null;
+  }>
 >([]);
 const contacts = ref<Array<{ _id: string; phoneE164?: string; username?: string; tags?: string[] }>>([]);
 
@@ -393,6 +471,9 @@ const peerAccountId = ref('');
 const peerContactId = ref('');
 const runMode = ref<'auto' | 'manual'>('manual');
 const creatingSession = ref(false);
+const runningWarmupOrchestrator = ref(false);
+const readinessRecommended = ref(3);
+const warmingPreview = ref<WarmingPreview | null>(null);
 
 const selectedSessionId = ref('');
 const loadingTranscript = ref(false);
@@ -469,8 +550,48 @@ const sessionHeaders = [
   { title: '', key: 'actions', sortable: false },
 ];
 
-/** Matches server default `WARMUP_DAYS` — shown in UI hint only. */
-const warmupDays = 3;
+watch([accountAId, peerAccountId, peerType], () => {
+  void loadWarmingPreview();
+});
+
+async function loadWarmingPreview(): Promise<void> {
+  if (!accountAId.value) {
+    warmingPreview.value = null;
+    return;
+  }
+  try {
+    const q = new URLSearchParams({ accountAId: accountAId.value });
+    if (peerType.value === 'account' && peerAccountId.value) {
+      q.set('peerAccountId', peerAccountId.value);
+    }
+    warmingPreview.value = await apiFetch<WarmingPreview>(
+      `/api/dialog-sessions/warming-preview?${q.toString()}`,
+    );
+  } catch {
+    warmingPreview.value = null;
+  }
+}
+
+function applySuggestedPreset(slug: string): void {
+  scriptSource.value = `preset:${slug}`;
+  toast.info('Suggested preset selected for session.');
+}
+
+async function runScheduledWarmup(): Promise<void> {
+  runningWarmupOrchestrator.value = true;
+  try {
+    const r = await apiFetch<{ created: number; started: number; skipped: number }>(
+      '/api/dialog-sessions/warmup-run',
+      { method: 'POST', body: JSON.stringify({ limit: 10 }) },
+    );
+    toast.success(`Warm-up run: ${r.created} created, ${r.started} started.`);
+    await loadAll();
+  } catch (e) {
+    toast.error(errorText(e));
+  } finally {
+    runningWarmupOrchestrator.value = false;
+  }
+}
 
 const presetScheduleRows = computed(() => {
   const turns = selectedPresetDetail.value?.turns;
@@ -490,10 +611,16 @@ const runModeItems = [
 const senderItems = computed(() =>
   accounts.value
     .filter((a) => a.role === 'sender')
-    .map((a) => ({
-      _id: a._id,
-      pickerLabel: accountPickerLabel(a),
-    })),
+    .map((a) => {
+      const warm =
+        a.status === 'warming' && a.readinessDialogsRecommended != null
+          ? ` · warm-up ${a.readinessDialogsCompleted ?? 0}/${a.readinessDialogsRecommended}`
+          : '';
+      return {
+        _id: a._id,
+        pickerLabel: `${accountPickerLabel(a)}${warm}`,
+      };
+    }),
 );
 
 function sessionParticipants(s: DialogSession): string {
@@ -764,10 +891,19 @@ async function createSession(): Promise<void> {
 
   creatingSession.value = true;
   try {
-    await apiFetch('/api/dialog-sessions', {
+    const res = await apiFetch<{
+      warmingHints?: Array<{ message: string }>;
+      validationIssues?: string[];
+    }>('/api/dialog-sessions', {
       method: 'POST',
       body: JSON.stringify(payload),
     });
+    if (res.validationIssues?.length) {
+      toast.warning(res.validationIssues.join(' · '));
+    }
+    if (res.warmingHints?.length) {
+      toast.info(res.warmingHints.map((h) => h.message).join(' '));
+    }
     toast.success('Session created.');
     await loadAll();
   } catch (e) {
@@ -866,6 +1002,12 @@ const { start: startPoll, stop: stopPoll } = usePolling(async () => {
 }, 5000);
 
 onMounted(async () => {
+  try {
+    const cfg = await apiFetch<{ readinessDialogsRecommended: number }>('/api/dialog-config/warming');
+    readinessRecommended.value = cfg.readinessDialogsRecommended ?? 3;
+  } catch {
+    /* keep default */
+  }
   await Promise.all([loadPresets(), loadAll()]);
   startPoll();
 });
