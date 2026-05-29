@@ -60,8 +60,8 @@ export async function importProxiesFromBulk(input: {
     let port = Number.parseInt(pick(row, 'port', 'Port') || '443', 10);
     const country = pick(row, 'country', 'Country').toUpperCase().slice(0, 2);
     let secret = pick(row, 'secret', 'Secret');
-    const login = pick(row, 'login', 'Login');
-    const password = pick(row, 'password', 'Password');
+    let login = pick(row, 'login', 'Login');
+    let password = pick(row, 'password', 'Password');
 
     if (!label) {
       failed++;
