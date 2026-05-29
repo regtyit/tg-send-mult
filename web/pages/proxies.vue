@@ -260,8 +260,8 @@
 </template>
 
 <script setup lang="ts">
-import { parseSocksHttpProxyLine } from '@repo/modules/proxy/parseSocksHttpProxy';
 import { coerceMtProxyImportFields, tryParseTelegramProxyLink } from '@repo/telegram/proxyParse';
+import { parseSocksHttpProxyLine } from '@repo/telegram/parseSocksHttpProxy';
 import { errorText } from '~/composables/useToast';
 import { DATA_TABLE_CLASS, fixedCol } from '~/utils/tableColumns';
 

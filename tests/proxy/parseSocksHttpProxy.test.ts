@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   coerceSocksHttpImportFields,
   parseSocksHttpProxyLine,
-} from '../../src/modules/proxy/parseSocksHttpProxy';
+} from '../../src/telegram/parseSocksHttpProxy';
 
 describe('parseSocksHttpProxy', () => {
   it('parses host:port:login:password', () => {

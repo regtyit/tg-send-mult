@@ -17,8 +17,8 @@ WORKDIR /app
 COPY web/package.json web/package-lock.json ./web/
 RUN cd web && npm ci
 COPY web ./web/
-# Nuxt @repo alias → /app/src; dashboard only needs proxy link parsing (no mongoose).
-COPY src/telegram/proxyParse.ts ./src/telegram/proxyParse.ts
+# Nuxt @repo alias → /app/src; dashboard only needs telegram proxy helpers (no mongoose).
+COPY src/telegram ./src/telegram
 RUN cd web && npm run build
 
 FROM node:20-bookworm-slim AS runtime
