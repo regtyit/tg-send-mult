@@ -55,6 +55,24 @@
       <v-alert v-if="!warmingAccounts.length" type="info" variant="tonal" density="compact" class="mb-3">
         No accounts in <strong>warming</strong> status. Import senders on the Senders page first.
       </v-alert>
+      <v-alert
+        v-if="lastWarmupRun?.failures?.length || lastWarmupRun?.skippedDetails?.length"
+        type="warning"
+        variant="tonal"
+        density="compact"
+        class="mb-3"
+      >
+        <div v-if="lastWarmupRun?.failures?.length" class="text-caption mb-1">
+          <strong>Last run failures:</strong>
+          <span v-for="(f, i) in lastWarmupRun!.failures!" :key="i" class="d-block">
+            {{ f.presetSlug ? `[${f.presetSlug}] ` : '' }}{{ f.reason }}
+          </span>
+        </div>
+        <div v-if="lastWarmupRun?.skippedDetails?.length" class="text-caption">
+          <strong>Skipped:</strong>
+          <span v-for="(s, i) in lastWarmupRun!.skippedDetails!" :key="i" class="d-block">{{ s.reason }}</span>
+        </div>
+      </v-alert>
       <v-data-table
         v-else
         v-model="selectedWarmingIds"
@@ -366,6 +384,23 @@
       <v-col cols="12" lg="6">
         <v-card class="mb-6 pa-4">
           <v-card-title class="text-subtitle-1 px-0 pt-0">Sessions</v-card-title>
+          <v-alert
+            v-if="failedSessions.length"
+            type="error"
+            variant="tonal"
+            density="compact"
+            class="mb-3"
+          >
+            <div class="text-subtitle-2 mb-1">{{ failedSessions.length }} failed session(s)</div>
+            <div v-for="s in failedSessions.slice(0, 5)" :key="s._id" class="text-caption mb-1">
+              <strong>{{ s.participants || s.name }}</strong>
+              <span v-if="s.scriptLabel"> · {{ s.scriptLabel }}</span>
+              — {{ s.lastError || 'Unknown error' }}
+            </div>
+            <div v-if="failedSessions.length > 5" class="text-caption text-medium-emphasis">
+              …and {{ failedSessions.length - 5 }} more (see Error column)
+            </div>
+          </v-alert>
           <v-data-table
             :headers="sessionHeaders"
             :items="sessionsDisplay"
@@ -379,6 +414,19 @@
             </template>
             <template #[`item.status`]="{ item }">
               <v-chip size="small" :color="statusColor(item.status)">{{ item.status }}</v-chip>
+            </template>
+            <template #[`item.scriptLabel`]="{ item }">
+              <span class="text-caption cell-overflow" :title="item.scriptLabel">{{ item.scriptLabel }}</span>
+            </template>
+            <template #[`item.errorSummary`]="{ item }">
+              <span
+                v-if="item.errorSummary"
+                class="text-caption text-error cell-overflow"
+                :title="item.errorSummary"
+              >
+                {{ item.errorSummary }}
+              </span>
+              <span v-else class="text-medium-emphasis">—</span>
             </template>
             <template #[`item.actions`]="{ item }">
               <v-btn size="small" variant="text" @click.stop="startSession(item._id)">Start</v-btn>
@@ -395,7 +443,16 @@
             <v-btn size="small" variant="text" :loading="loadingTranscript" @click="loadTranscript">Refresh</v-btn>
           </v-card-title>
           <div v-if="transcriptLines.length === 0" class="text-medium-emphasis text-caption">No messages yet.</div>
-          <v-list v-else density="compact" class="transcript-list">
+          <v-alert
+            v-if="selectedSession?.status === 'failed' && selectedSession.lastError"
+            type="error"
+            variant="tonal"
+            density="compact"
+            class="mb-3"
+          >
+            Session failed: {{ selectedSession.lastError }}
+          </v-alert>
+          <v-list v-if="transcriptLines.length" density="compact" class="transcript-list">
             <v-list-item v-for="(line, i) in transcriptLines" :key="i">
               <template #prepend>
                 <v-chip size="x-small" :color="line.direction === 'incoming' ? 'info' : 'primary'">
@@ -405,6 +462,7 @@
               <v-list-item-title>{{ line.text }}</v-list-item-title>
               <v-list-item-subtitle>
                 {{ line.meta }}
+                <span v-if="line.error" class="text-error"> · {{ line.error }}</span>
                 <v-chip v-if="line.read" size="x-small" color="success" class="ml-1">read</v-chip>
               </v-list-item-subtitle>
             </v-list-item>
@@ -479,12 +537,25 @@ interface DialogSession {
   runMode: string;
   currentTurn: number;
   nextRunAt?: string | null;
+  lastError?: string;
+  scriptId?: string;
   accountAId?: string;
   peerType?: string;
   peerAccountId?: string;
   peerContactId?: string;
   participants?: string;
   nextStep?: string;
+  scriptLabel?: string;
+  errorSummary?: string;
+}
+
+interface WarmupRunResult {
+  created: number;
+  started: number;
+  skipped: number;
+  plans?: Array<{ presetSlug: string; presetName: string }>;
+  failures?: Array<{ reason: string; presetSlug?: string; sessionId?: string }>;
+  skippedDetails?: Array<{ reason: string; presetSlug?: string }>;
 }
 
 interface TranscriptLine {
@@ -492,6 +563,7 @@ interface TranscriptLine {
   text: string;
   meta: string;
   read: boolean;
+  error?: string;
 }
 
 const { apiFetch } = useBasicAuth();
@@ -549,6 +621,7 @@ const selectedWarmingIds = ref<string[]>([]);
 const warmingSummary = ref<{ warmingCount: number; dueCount: number; readinessMetCount: number } | null>(
   null,
 );
+const lastWarmupRun = ref<WarmupRunResult | null>(null);
 
 const warmingHeaders = [
   { title: 'Account', key: 'label' },
@@ -634,7 +707,9 @@ const scriptSourceItems = computed(() => {
 const sessionHeaders = [
   { title: 'Name', key: 'name' },
   { title: 'Participants', key: 'participants' },
+  { title: 'Template', key: 'scriptLabel' },
   { title: 'Status', key: 'status' },
+  { title: 'Error', key: 'errorSummary' },
   { title: 'Mode', key: 'runMode' },
   { title: 'Turn', key: 'currentTurn' },
   { title: 'Next step', key: 'nextStep' },
@@ -668,14 +743,29 @@ function applySuggestedPreset(slug: string): void {
   toast.info('Suggested preset selected for session.');
 }
 
+function formatWarmupRunMessage(r: WarmupRunResult): string {
+  const parts = [`${r.created} created`, `${r.started} started`];
+  if (r.skipped) parts.push(`${r.skipped} skipped`);
+  if (r.failures?.length) {
+    parts.push(`${r.failures.length} failed: ${r.failures.map((f) => f.reason).join('; ')}`);
+  }
+  if (r.plans?.length) {
+    const templates = [...new Set(r.plans.map((p) => p.presetSlug))];
+    parts.push(`templates: ${templates.join(', ')}`);
+  }
+  return parts.join(' · ');
+}
+
 async function runScheduledWarmup(): Promise<void> {
   runningWarmupOrchestrator.value = true;
   try {
-    const r = await apiFetch<{ created: number; started: number; skipped: number; plans: unknown[] }>(
-      '/api/dialog-sessions/warmup-run',
-      { method: 'POST', body: JSON.stringify({ limit: 20, requireDue: true }) },
-    );
-    toast.success(`Warm-up: ${r.created} sessions created, ${r.started} started.`);
+    const r = await apiFetch<WarmupRunResult>('/api/dialog-sessions/warmup-run', {
+      method: 'POST',
+      body: JSON.stringify({ limit: 20, requireDue: true }),
+    });
+    if (r.failures?.length) toast.error(formatWarmupRunMessage(r));
+    else toast.success(formatWarmupRunMessage(r));
+    lastWarmupRun.value = r;
     await loadAll();
     await loadWarmingSummary();
   } catch (e) {
@@ -693,7 +783,7 @@ async function warmSelectedAccounts(): Promise<void> {
   }
   runningWarmupOrchestrator.value = true;
   try {
-    const r = await apiFetch<{ created: number; started: number; skipped: number }>(
+    const r = await apiFetch<WarmupRunResult>(
       '/api/dialog-sessions/warmup-run',
       {
         method: 'POST',
@@ -705,7 +795,9 @@ async function warmSelectedAccounts(): Promise<void> {
         }),
       },
     );
-    toast.success(`Warm-up started: ${r.created} sessions, ${r.started} running.`);
+    if (r.failures?.length) toast.error(formatWarmupRunMessage(r));
+    else toast.success(formatWarmupRunMessage(r));
+    lastWarmupRun.value = r;
     selectedWarmingIds.value = [];
     await loadAll();
     await loadWarmingSummary();
@@ -772,7 +864,16 @@ function sessionParticipants(s: DialogSession): string {
   return `${aLabel} → ${cLabel}`;
 }
 
+function sessionScriptLabel(s: DialogSession): string {
+  const id = String(s.scriptId ?? '');
+  const script = scripts.value.find((x) => x._id === id);
+  return script?.name ?? (id ? id.slice(-6) : '—');
+}
+
 function sessionNextStep(s: DialogSession): string {
+  if (s.status === 'failed') {
+    return s.lastError?.trim() ? s.lastError.trim().slice(0, 80) : 'Failed (see Error column)';
+  }
   if (s.runMode !== 'auto') {
     return s.status === 'running' || s.status === 'waiting_peer' ? 'Manual Step' : '—';
   }
@@ -795,8 +896,18 @@ const sessionsDisplay = computed(() =>
   sessions.value.map((s) => ({
     ...s,
     participants: sessionParticipants(s),
+    scriptLabel: sessionScriptLabel(s),
+    errorSummary: s.status === 'failed' ? (s.lastError?.trim() || 'Failed') : s.lastError?.trim() || '',
     nextStep: sessionNextStep(s),
   })),
+);
+
+const failedSessions = computed(() =>
+  sessionsDisplay.value.filter((s) => s.status === 'failed'),
+);
+
+const selectedSession = computed(() =>
+  sessions.value.find((s) => s._id === selectedSessionId.value) ?? null,
 );
 const contactItems = computed(() =>
   contacts.value.map((c) => ({
@@ -1104,16 +1215,18 @@ async function loadTranscript(): Promise<void> {
   loadingTranscript.value = true;
   try {
     const data = await apiFetch<{
-      turns: Array<{ side: string; text: string; sentAt?: string; readAt?: string }>;
+      session?: { status?: string; lastError?: string };
+      turns: Array<{ side: string; text: string; sentAt?: string; readAt?: string; error?: string }>;
       inbound: Array<{ direction: string; text: string; readAt?: string; telegramDate?: string }>;
     }>(`/api/dialog-sessions/${selectedSessionId.value}/transcript`);
     const lines: TranscriptLine[] = [];
     for (const t of data.turns ?? []) {
       lines.push({
         direction: t.side === 'sync' ? 'sync' : 'outgoing',
-        text: t.text || `(turn ${t.side})`,
+        text: t.error ? `(failed) ${t.text || t.side}` : t.text || `(turn ${t.side})`,
         meta: t.sentAt ? new Date(t.sentAt).toLocaleString() : '',
         read: Boolean(t.readAt),
+        error: t.error?.trim() || undefined,
       });
     }
     for (const m of data.inbound ?? []) {

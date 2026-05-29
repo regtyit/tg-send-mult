@@ -20,6 +20,21 @@ export interface WarmupPairPlan {
   due: boolean;
 }
 
+export interface WarmupOrchestratorSkip {
+  accountAId?: string;
+  accountBId?: string;
+  presetSlug?: string;
+  reason: string;
+}
+
+export interface WarmupOrchestratorFailure {
+  sessionId?: string;
+  accountAId?: string;
+  accountBId?: string;
+  presetSlug?: string;
+  reason: string;
+}
+
 export interface WarmupOrchestratorResult {
   scanned: number;
   paired: number;
@@ -28,6 +43,8 @@ export interface WarmupOrchestratorResult {
   skipped: number;
   dryRun: boolean;
   plans: WarmupPairPlan[];
+  skippedDetails: WarmupOrchestratorSkip[];
+  failures: WarmupOrchestratorFailure[];
 }
 
 function accountLabel(a: Pick<AccountDoc, 'phone' | 'label'>): string {
@@ -43,9 +60,28 @@ export interface PlanWarmupOptions {
   requireInWindow?: boolean;
 }
 
-function buildPairPlan(a: AccountDoc, b: AccountDoc, at: Date): WarmupPairPlan | null {
-  const suggestion = suggestWarmupPreset(a);
+function excludeSlugsForPair(
+  a: AccountDoc,
+  b: AccountDoc,
+  batchUsedSlugs: Set<string>,
+): Set<string> {
+  const slugs = new Set(batchUsedSlugs);
+  for (const s of a.warmingUsedPresetSlugs ?? []) slugs.add(s);
+  for (const s of b.warmingUsedPresetSlugs ?? []) slugs.add(s);
+  return slugs;
+}
+
+function buildPairPlan(
+  a: AccountDoc,
+  b: AccountDoc,
+  at: Date,
+  batchUsedSlugs: Set<string>,
+): WarmupPairPlan | null {
+  const suggestion = suggestWarmupPreset(a, {
+    excludeSlugs: excludeSlugsForPair(a, b, batchUsedSlugs),
+  });
   if (!suggestion) return null;
+  batchUsedSlugs.add(suggestion.slug);
   return {
     accountAId: String(a._id),
     accountBId: String(b._id),
@@ -60,6 +96,7 @@ export function planWarmupForAccountIds(
   accounts: AccountDoc[],
   orderedIds: string[],
   at: Date = new Date(),
+  batchUsedSlugs = new Set<string>(),
 ): WarmupPairPlan[] {
   const byId = new Map(accounts.map((a) => [String(a._id), a]));
   const plans: WarmupPairPlan[] = [];
@@ -67,7 +104,7 @@ export function planWarmupForAccountIds(
     const a = byId.get(orderedIds[i]!);
     const b = byId.get(orderedIds[i + 1]!);
     if (!a || !b) continue;
-    const plan = buildPairPlan(a, b, at);
+    const plan = buildPairPlan(a, b, at, batchUsedSlugs);
     if (plan) plans.push(plan);
   }
   return plans;
@@ -93,6 +130,8 @@ export async function planWarmupDialogPairs(
     )
     .lean();
 
+  const batchUsedSlugs = new Set<string>();
+
   if (opts.accountIds?.length) {
     const requireDue = opts.requireDue !== false;
     const requireInWindow = opts.requireInWindow !== false;
@@ -106,7 +145,7 @@ export async function planWarmupDialogPairs(
         .map((a) => String(a._id)),
     );
     const ordered = opts.accountIds.filter((id) => eligibleIds.has(id));
-    return planWarmupForAccountIds(warming as AccountDoc[], ordered, at);
+    return planWarmupForAccountIds(warming as AccountDoc[], ordered, at, batchUsedSlugs);
   }
 
   const due = warming.filter((a) => {
@@ -133,7 +172,7 @@ export async function planWarmupDialogPairs(
     if (!peer) continue;
 
     const bId = String(peer._id);
-    const plan = buildPairPlan(a as AccountDoc, peer as AccountDoc, at);
+    const plan = buildPairPlan(a as AccountDoc, peer as AccountDoc, at, batchUsedSlugs);
     if (!plan) continue;
 
     plans.push(plan);
@@ -171,6 +210,8 @@ export async function runWarmupOrchestrator(opts: {
     skipped: 0,
     dryRun,
     plans,
+    skippedDetails: [],
+    failures: [],
   };
 
   if (dryRun || !plans.length) return result;
@@ -184,6 +225,12 @@ export async function runWarmupOrchestrator(opts: {
       }).lean();
       if (existing) {
         result.skipped += 1;
+        result.skippedDetails.push({
+          accountAId: plan.accountAId,
+          accountBId: plan.accountBId,
+          presetSlug: plan.presetSlug,
+          reason: 'Active session already exists for this pair',
+        });
         continue;
       }
 
@@ -219,10 +266,28 @@ export async function runWarmupOrchestrator(opts: {
           },
         );
         await continueDialogSession(session._id);
-        result.started += 1;
+        const updated = await DialogSessionModel.findById(session._id).lean();
+        if (updated?.status === 'failed') {
+          result.failures.push({
+            sessionId: String(session._id),
+            accountAId: plan.accountAId,
+            accountBId: plan.accountBId,
+            presetSlug: plan.presetSlug,
+            reason: updated.lastError?.trim() || 'Session failed during first turn',
+          });
+        } else {
+          result.started += 1;
+        }
       }
     } catch (err) {
       result.skipped += 1;
+      const reason = err instanceof Error ? err.message : String(err);
+      result.skippedDetails.push({
+        accountAId: plan.accountAId,
+        accountBId: plan.accountBId,
+        presetSlug: plan.presetSlug,
+        reason,
+      });
       logger.warn({ err, plan }, 'warmup orchestrator: pair failed');
     }
   }
