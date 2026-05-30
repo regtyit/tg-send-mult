@@ -171,6 +171,13 @@
           >
             due
           </v-chip>
+          <span
+            v-if="!item.warming?.readinessMet && item.warming?.nextRecommendedDialogAt"
+            class="text-caption text-medium-emphasis d-block mt-1 cell-overflow"
+            :title="warmupScheduleTitle(item)"
+          >
+            {{ warmupScheduleLabel(item) }}
+          </span>
         </span>
         <span v-else class="text-medium-emphasis">—</span>
       </template>
@@ -361,6 +368,7 @@
 
 <script setup lang="ts">
 import { errorText } from '~/composables/useToast';
+import { describeWarmupScheduleMode, formatWarmupNextAt } from '~/utils/dialogSchedule';
 import { DATA_TABLE_CLASS, fixedCol } from '~/utils/tableColumns';
 
 interface Account {
@@ -396,6 +404,7 @@ interface Account {
     readinessMet: boolean;
     warmupDialogDue: boolean;
     nextRecommendedDialogAt: string | null;
+    warmupSchedule?: { mode?: 'interval' | 'weekdays'; intervalDays?: number; weekdays?: number[] };
   };
 }
 interface ProxyRow {
@@ -466,6 +475,26 @@ function activeHoursTitle(item: Account): string {
   if (!sw) return '';
   const quiet = item.sendingQuietUntil ? ` · ${item.sendingQuietUntil}` : '';
   return `${sw.start}–${sw.end} ${sw.timezone}${quiet}`;
+}
+
+function warmupScheduleLabel(item: Account): string {
+  const w = item.warming;
+  if (!w?.nextRecommendedDialogAt) return '—';
+  return formatWarmupNextAt(w.nextRecommendedDialogAt, {
+    due: w.warmupDialogDue,
+    timezone: item.sendingWindow?.timezone,
+  }).label;
+}
+
+function warmupScheduleTitle(item: Account): string {
+  const w = item.warming;
+  if (!w?.nextRecommendedDialogAt) return '';
+  const { title } = formatWarmupNextAt(w.nextRecommendedDialogAt, {
+    due: w.warmupDialogDue,
+    timezone: item.sendingWindow?.timezone,
+  });
+  const mode = describeWarmupScheduleMode(w.warmupSchedule);
+  return title ? `${title} (${mode})` : mode;
 }
 
 function proxyOptionsForAccount(_accountId: string): ProxyRow[] {

@@ -72,3 +72,43 @@ export function formatNextRunAt(iso: string | null | undefined, nowMs = Date.now
   if (diffSec < 5) return 'now';
   return `in ${formatSec(diffSec)}`;
 }
+
+export interface WarmupScheduleView {
+  mode?: 'interval' | 'weekdays';
+  intervalDays?: number;
+  weekdays?: number[];
+}
+
+const ISO_WEEKDAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+/** Human label for account warm-up schedule (interval or weekday slots). */
+export function describeWarmupScheduleMode(schedule?: WarmupScheduleView | null): string {
+  if (!schedule || schedule.mode === 'interval' || !schedule.mode) {
+    const days = schedule?.intervalDays ?? 2;
+    return `every ${days} day${days === 1 ? '' : 's'}`;
+  }
+  const wds = schedule.weekdays?.length ? schedule.weekdays : [1, 3, 5];
+  return wds.map((d) => ISO_WEEKDAY_NAMES[(d - 1 + 7) % 7] ?? '?').join(', ');
+}
+
+/** Relative + local datetime for the next recommended warm-up dialog slot. */
+export function formatWarmupNextAt(
+  iso: string | null | undefined,
+  opts?: { due?: boolean; nowMs?: number; timezone?: string },
+): { label: string; title: string } {
+  if (!iso) return { label: '—', title: '' };
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) return { label: '—', title: '' };
+  const tz = opts?.timezone?.trim();
+  const title = tz
+    ? new Intl.DateTimeFormat(undefined, {
+        timeZone: tz,
+        dateStyle: 'medium',
+        timeStyle: 'short',
+      }).format(new Date(iso))
+    : new Date(iso).toLocaleString();
+  if (opts?.due) return { label: 'due now', title };
+  const relative = formatNextRunAt(iso, opts?.nowMs);
+  if (relative === 'now') return { label: 'due now', title };
+  return { label: relative, title };
+}

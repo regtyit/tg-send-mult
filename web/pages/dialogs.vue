@@ -50,7 +50,8 @@
       <p class="text-caption text-medium-emphasis mb-3">
         Select warming accounts (even count) and run automatic two-way dialog sessions. Needs
         <code>dev:worker</code> + <code>dev:scheduler</code>. Recommended: {{ readinessRecommended }}
-        completed dialogs per account.
+        completed dialogs per account. Default schedule: every 2 days (per account timezone).
+        Auto-pair runs at <strong>:15 past each hour</strong> when the scheduler is running.
       </p>
       <v-alert v-if="!warmingAccounts.length" type="info" variant="tonal" density="compact" class="mb-3">
         No accounts in <strong>warming</strong> status. Import senders on the Senders page first.
@@ -91,7 +92,27 @@
           </v-chip>
         </template>
         <template #[`item.schedule`]="{ item }">
-          <v-chip v-if="item.warming?.warmupDialogDue" size="x-small" color="primary" variant="tonal">due</v-chip>
+          <span v-if="item.warming?.readinessMet" class="text-caption text-medium-emphasis">complete</span>
+          <template v-else-if="item.warming?.nextRecommendedDialogAt">
+            <v-chip
+              v-if="item.warming.warmupDialogDue"
+              size="x-small"
+              color="primary"
+              variant="tonal"
+              class="mb-1"
+            >
+              due now
+            </v-chip>
+            <span
+              class="text-caption d-block cell-overflow"
+              :title="warmupScheduleTitle(item)"
+            >
+              {{ warmupScheduleLabel(item) }}
+            </span>
+            <span class="text-caption text-medium-emphasis d-block">
+              {{ describeWarmupScheduleMode(item.warming.warmupSchedule) }}
+            </span>
+          </template>
           <span v-else class="text-caption text-medium-emphasis">—</span>
         </template>
         <template #[`item.active`]="{ item }">
@@ -475,7 +496,12 @@
 
 <script setup lang="ts">
 import { accountPickerLabel } from '~/utils/accountLabel';
-import { buildDialogTurnSchedule, formatNextRunAt } from '~/utils/dialogSchedule';
+import {
+  buildDialogTurnSchedule,
+  describeWarmupScheduleMode,
+  formatNextRunAt,
+  formatWarmupNextAt,
+} from '~/utils/dialogSchedule';
 import { DATA_TABLE_CLASS } from '~/utils/tableColumns';
 
 interface WarmingStatusView {
@@ -484,6 +510,7 @@ interface WarmingStatusView {
   readinessMet: boolean;
   warmupDialogDue: boolean;
   nextRecommendedDialogAt: string | null;
+  warmupSchedule?: { mode?: 'interval' | 'weekdays'; intervalDays?: number; weekdays?: number[] };
   hints: Array<{ code: string; message: string; severity: string }>;
 }
 
@@ -592,6 +619,7 @@ const accounts = ref<
     readinessDialogsRecommended?: number;
     readinessMet?: boolean;
     sendingActiveNow?: boolean;
+    sendingWindow?: { timezone?: string };
     warming?: WarmingStatusView | null;
   }>
 >([]);
@@ -638,6 +666,28 @@ const warmingAccounts = computed(() =>
       label: accountPickerLabel(a),
     })),
 );
+
+type WarmingAccountRow = (typeof warmingAccounts.value)[number];
+
+function warmupScheduleLabel(item: WarmingAccountRow): string {
+  const w = item.warming;
+  if (!w?.nextRecommendedDialogAt) return '—';
+  return formatWarmupNextAt(w.nextRecommendedDialogAt, {
+    due: w.warmupDialogDue,
+    timezone: item.sendingWindow?.timezone,
+  }).label;
+}
+
+function warmupScheduleTitle(item: WarmingAccountRow): string {
+  const w = item.warming;
+  if (!w?.nextRecommendedDialogAt) return '';
+  const { title } = formatWarmupNextAt(w.nextRecommendedDialogAt, {
+    due: w.warmupDialogDue,
+    timezone: item.sendingWindow?.timezone,
+  });
+  const mode = describeWarmupScheduleMode(w.warmupSchedule);
+  return title ? `${title} (${mode})` : mode;
+}
 
 const selectedSessionId = ref('');
 const loadingTranscript = ref(false);
