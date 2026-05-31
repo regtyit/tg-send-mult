@@ -26,8 +26,10 @@ export async function continueDialogSession(sessionId: Types.ObjectId | string):
     await enqueueDialogTurn(id.toString(), delayMs);
     return;
   }
-  if (updated.status === 'running' && updated.nextRunAt) {
-    const delayMs = Math.max(0, updated.nextRunAt.getTime() - Date.now());
+  if (updated.status === 'running') {
+    const delayMs = updated.nextRunAt
+      ? Math.max(0, updated.nextRunAt.getTime() - Date.now())
+      : 0;
     await enqueueDialogTurn(id.toString(), delayMs);
   }
 }

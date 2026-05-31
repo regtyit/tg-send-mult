@@ -175,7 +175,11 @@ async function dialogSessionsTick(): Promise<void> {
 }
 
 async function warmupDialogsTick(): Promise<void> {
-  const r = await runWarmupOrchestrator({ limit: 10, autoStart: true });
+  const r = await runWarmupOrchestrator({
+    limit: 10,
+    autoStart: true,
+    requireInWindow: false,
+  });
   if (r.created > 0 || r.started > 0) {
     logger.info(
       { created: r.created, started: r.started, skipped: r.skipped },
@@ -207,7 +211,7 @@ async function main(): Promise<void> {
     cron.schedule('* * * * *', () => {
       dialogSessionsTick().catch((err) => logger.error({ err }, 'scheduler: dialog sessions failed'));
     }),
-    cron.schedule('15 * * * *', () => {
+    cron.schedule('* * * * *', () => {
       warmupDialogsTick().catch((err) => logger.error({ err }, 'scheduler: warm-up dialogs failed'));
     }),
   ];

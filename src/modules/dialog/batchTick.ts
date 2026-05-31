@@ -95,7 +95,10 @@ export async function runDialogSessionsBatch(
             status: 'waiting_peer',
             $or: [{ nextRunAt: null }, { nextRunAt: { $lte: now } }],
           },
-          { status: 'running', nextRunAt: { $lte: now } },
+          {
+            status: 'running',
+            $or: [{ nextRunAt: null }, { nextRunAt: { $lte: now } }],
+          },
         ],
       },
       {

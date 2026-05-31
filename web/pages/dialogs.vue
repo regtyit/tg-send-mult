@@ -51,7 +51,7 @@
         Select warming accounts (even count) and run automatic two-way dialog sessions. Needs
         <code>dev:worker</code> + <code>dev:scheduler</code>. Recommended: {{ readinessRecommended }}
         completed dialogs per account. Default schedule: every 2 days (per account timezone).
-        Auto-pair runs at <strong>:15 past each hour</strong> when the scheduler is running.
+        Auto-pair runs every minute when the scheduler is running (first turn may defer to active hours).
       </p>
       <v-alert v-if="!warmingAccounts.length" type="info" variant="tonal" density="compact" class="mb-3">
         No accounts in <strong>warming</strong> status. Import senders on the Senders page first.

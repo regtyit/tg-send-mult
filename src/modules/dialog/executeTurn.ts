@@ -322,7 +322,7 @@ export async function executeDialogTurn(
     }
     await DialogSessionModel.updateOne(
       { _id: session._id },
-      { $set: { peerCheckAttempt: 0, nextRunAt: null } },
+      { $set: { peerCheckAttempt: 0, nextRunAt: new Date() } },
     );
     if (session.status === 'waiting_peer') {
       await DialogSessionModel.updateOne({ _id: session._id }, { $set: { status: 'running' } });
